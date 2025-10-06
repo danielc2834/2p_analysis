@@ -1,0 +1,47 @@
+Stimulus: 0.0
+
+Statistics:
+
+group: [('BA', 'No Odor'), ('BA', 'without'), ('No Odor', 'without')]	visual protocol: 0.0	Values: delta	normality: ['False', 'False', 'False']	normp: [0.00012781049008481205, 0.0005920029361732304, 1.8897561631092685e-06]	test: Kruskal Wallis > Dunn's test with bonferoni correction	pvalue: [1.0, 0.0013516132513140622, 0.001472241284457711], [None, '**', '**']
+
+Stimulus: 45.0
+
+Statistics:
+
+group: [('BA', 'No Odor'), ('BA', 'without'), ('No Odor', 'without')]	visual protocol: 45.0	Values: delta	normality: ['False', 'False', 'False']	normp: [5.245875581749715e-05, 9.876621334115043e-05, 9.779878951121646e-08]	test: Kruskal Wallis > Dunn's test with bonferoni correction	pvalue: [1.0, 0.15026169325895625, 0.014803793644498353], [None, None, '*']
+
+Stimulus: 90.0
+
+Statistics:
+
+group: [('BA', 'No Odor'), ('BA', 'without'), ('No Odor', 'without')]	visual protocol: 90.0	Values: delta	normality: ['False', 'False', 'False']	normp: [0.006181709002703428, 0.005366369616240263, 2.8785409085685387e-05]	test: Kruskal Wallis > Dunn's test with bonferoni correction	pvalue: [1.0, 0.037260793587769736, 0.010464460745289448], [None, '*', '*']
+
+Stimulus: 135.0
+
+Statistics:
+
+group: [('BA', 'No Odor'), ('BA', 'without'), ('No Odor', 'without')]	visual protocol: 135.0	Values: delta	normality: ['False', 'False', 'False']	normp: [0.00027986973873339593, 0.0011611096560955048, 4.310085569159128e-05]	test: Kruskal Wallis > Dunn's test with bonferoni correction	pvalue: [1.0, 0.09939667337731622, 0.056803229792620535], [None, None, None]
+
+Stimulus: 180.0
+
+Statistics:
+
+group: [('BA', 'No Odor'), ('BA', 'without'), ('No Odor', 'without')]	visual protocol: 180.0	Values: delta	normality: ['True', 'False', 'False']	normp: [0.13101251423358917, 1.3232025253273605e-07, 1.1850906048493925e-05]	test: Kruskal Wallis	pvalue: 0.44997874346759614, None
+
+Stimulus: 225.0
+
+Statistics:
+
+group: [('BA', 'No Odor'), ('BA', 'without'), ('No Odor', 'without')]	visual protocol: 225.0	Values: delta	normality: ['False', 'False', 'False']	normp: [0.011169440113008022, 7.041162916721078e-06, 7.713730099112581e-09]	test: Kruskal Wallis	pvalue: 0.06106754658456448, None
+
+Stimulus: 270.0
+
+Statistics:
+
+group: [('BA', 'No Odor'), ('BA', 'without'), ('No Odor', 'without')]	visual protocol: 270.0	Values: delta	normality: ['True', 'False', 'False']	normp: [0.16471345722675323, 0.0006908833747729659, 2.1208397527061607e-07]	test: Kruskal Wallis	pvalue: 0.6371087424625169, None
+
+Stimulus: 315.0
+
+Statistics:
+
+group: [('BA', 'No Odor'), ('BA', 'without'), ('No Odor', 'without')]	visual protocol: 315.0	Values: delta	normality: ['False', 'False', 'False']	normp: [8.907943265512586e-05, 6.833914085291326e-06, 5.175966725801118e-05]	test: Kruskal Wallis > Dunn's test with bonferoni correction	pvalue: [1.0, 0.07451157530276757, 0.053382791069674966], [None, None, None]

@@ -1,0 +1,55 @@
+####SECTION 1: General parameters##############################################
+# Config file for the analysis of L2 data
+
+code_path: "U:\\Work_PT_server\\Code\\2p_analysis_development\\2panalysis\\Helpers"
+
+home_path: 'C:\Users\ptrimbak\Work_PT\2p_data\241129_L2_zoomed' # r'C:\Users\ptrimbak\Work_PT\2p_data\241014_L2_linear_filters\241020_L2_filter_circle' 
+
+experiment: ['50ms'] # ['50ms'] #'17ms', '50ms']#['0deg', '15deg', '30deg', '45deg', '60deg', '75deg', '90deg']
+
+expected_polarity: null # 'ON' #'ON' # important for fffs for now (only implemented in the fff analysis)
+
+erase_checkpoints: true # if true, all checkpoints will be erased !careful! if you care about any particular checkpoint
+
+experimenter: ['*_PT_*', '*_PT_*', '*_PT_*', '*_PT_*', '*_PT_*', '*_PT_*', '*_PT_*'] 
+
+# original_stimDir: !!python/name:os.path.join [r'C:\Users\ptrimbak\Work_PT\2p_data\241129_L2_zoomed', 'input_stimuli']
+
+#filtering_and_preprocessing_parameters:
+apply_shapeOverlapFilter: false # (should be true in general except for manual ROIS)
+overlap_filter_property: ['CSI'] # ['reliability_PD', 'reliability_PD'] # !! WARNING: so far only implemented for 1st cycle if there are multicycle recordings
+FFT_filtered: false # true if fourier algorithm was used in preprocessing
+motion_corrected: true # in principle this should always be true for T4T5 recordings
+in_phase_bg_subtraction: false # in order to compensate for structured bleedthrough (stripes)
+prefered_direction_filter: false
+
+#plotting_parameters:
+plot_roi_summ: true # plot roisummary
+plot_individual_traces: [true, true, true, true, true, true]
+filter_next_cycles: false
+
+#extraction_parameters:
+analize_only_first_cycle: false # for any analysis where this script is only needed for the first cycle in a tseries with more than one cycle
+extraction_type: 'load_manual' # 'cluster analysis MH_JF' # 'load_manual' #'cluster analysis Henning_20' #'transfer' 'manual'
+use_avg_data_for_roi_extract: false
+use_other_series_roiExtraction: false
+save_data: [true, true, true, true, true, true] # list of booleans for which traces to keep in the final resulting pickle file
+
+####SECTION 2: Motion correction parameters#######################################
+# Parameters for motion correction
+mot_corr: true #perform motion correction without filtering out bleedthorugh
+
+bleedtrough_filtering: false #this is to be set true when the bleedthrough from stimulation light interferes with motion correction. both filtering and motion correction are done
+fft_filter_treshold: 1
+displacement: [30,10] #[y,x] max displacement values, this is an input for the motion correction function of sima
+produce_video_boolean: false # deprecated
+produce_tif_stack: true
+export_average: true
+produce_individual_tifs: false
+Motion_correction_algorithm: "chris" # "Caiman" or "chris"
+channel: '2'
+
+####SECTION 3: Miscellaneous: No need to change  ########################################
+
+warnings_filter: "error"
+warnings_category: "RuntimeWarning"

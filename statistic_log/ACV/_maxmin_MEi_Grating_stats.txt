@@ -1,0 +1,24 @@
+Stimulus: 0.0_0.0
+
+Statistics:
+
+group: [('ACV', 'No Odor'), ('ACV', 'without'), ('No Odor', 'without')]	visual protocol: 0.0_0.0	Values: area	normality: ['False', 'False', 'False']	normp: [1.347808583490595e-11, 7.233161181119385e-09, 1.812292871328225e-09]	test: Kruskal Wallis > Dunn's test with bonferoni correction	pvalue: [1.0, 4.6440325091619513e-05, 0.000724468270811001], [None, '***', '***']
+
+Stimulus: 90.0_1.0
+
+Statistics:
+
+group: [('ACV', 'No Odor'), ('ACV', 'without'), ('No Odor', 'without')]	visual protocol: 90.0_1.0	Values: area	normality: ['False', 'False', 'False']	normp: [1.0665864025316552e-10, 1.1718357395551493e-09, 9.124370703439411e-10]	test: Kruskal Wallis > Dunn's test with bonferoni correction	pvalue: [1.0, 0.00026774545089554194, 0.00025268468280830174], [None, '***', '***']
+
+Stimulus: 90.0_-1.0
+
+Statistics:
+
+group: [('ACV', 'No Odor'), ('ACV', 'without'), ('No Odor', 'without')]	visual protocol: 90.0_-1.0	Values: area	normality: ['False', 'False', 'False']	normp: [1.8145294988780591e-10, 7.060499740418891e-09, 6.238362604271686e-11]	test: Kruskal Wallis > Dunn's test with bonferoni correction	pvalue: [1.0, 0.0010415555135608247, 0.02735668166350822], [None, '**', '*']
+
+Stimulus: 0.0_1.0
+
+Statistics:
+
+group: [('ACV', 'No Odor'), ('ACV', 'without'), ('No Odor', 'without')]	visual protocol: 0.0_1.0	Values: area	normality: ['False', 'False', 'False']	normp: [2.6074260972563934e-08, 1.986180109270208e-09, 2.966823444694455e-07]	test: Kruskal Wallis > Dunn's test with bonferoni correction	pvalue: [0.2618202007039655, 0.00011940329371543565, 0.09652437554294774], [None, '***', None]
+

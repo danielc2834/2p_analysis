@@ -1,7 +1,9 @@
 '''Functions related to the preprocessing of Calcium Imaging recordings'''
 ################################################ IMPORTS ################################################
-import os, pickle, glob, tifffile, cv2, copy, warnings, preprocessing_params, copy, cmath, math, shutil
+import os, pickle, glob, tifffile, cv2, copy, warnings, preprocessing_params, copy, cmath, math, shutil, time
 from matplotlib.gridspec import GridSpec
+from scipy.ndimage import label
+from skimage.filters import threshold_local
 from scipy.stats.stats import pearsonr
 from itertools import permutations
 from logging import exception
@@ -21,6 +23,8 @@ from roipoly import RoiPoly
 from Helpers.xmlUtilities import getFramePeriod, getLayerPosition, getPixelSize, getMicRelativeTime, getrastersPerFrame
 from scipy.stats import shapiro, ttest_ind, mannwhitneyu, wilcoxon, kruskal
 import scikit_posthocs as sp
+from datetime import date
+from skimage.color import label2rgb
 
 ################################################ Statistics ################################################
 def all_possible_pairs(list):
@@ -36,6 +40,60 @@ def sig_level(pvalue):
     elif pvalue < 0.001:
         level='***'
     return level
+
+def CrossCorrImage(tc, block_size=15, w=3, pixel_percentile=10, min_area=10):
+    ymax, xmax, numFrames = tc.shape
+    ccimage = np.zeros((ymax, xmax))
+
+    start_time = time.time()
+
+    # Select only active pixels based on std
+    pixel_stds = np.std(tc, axis=2)
+    thresh_val = np.percentile(pixel_stds, pixel_percentile)
+    active_mask = pixel_stds > thresh_val
+    tc = tc * active_mask[:, :, np.newaxis]
+
+    # Cross-correlation computation
+    for y in range(1 + w, ymax - w):
+        for x in range(1 + w, xmax - w):
+            center = tc[y, x, :] - np.mean(tc[y, x, :])
+            center = center.reshape(1, 1, numFrames)
+            ad_a = np.sum(center * center, axis=2)
+
+            neighborhood = tc[y - w:y + w + 1, x - w:x + w + 1, :]
+            neighborhood_mean = np.mean(neighborhood, axis=2)
+            thing2 = neighborhood - neighborhood_mean[:, :, np.newaxis]
+            ad_b = np.sum(thing2 * thing2, axis=2)
+
+            ccs = np.sum(center * thing2, axis=2) / np.sqrt(ad_a * ad_b)
+            ccs = np.delete(ccs, (ccs.size - 1) // 2)  # Remove center pixel
+            ccimage[y, x] = np.mean(ccs)
+
+    # Adaptive thresholding
+    adaptive_thresh = threshold_local(ccimage, block_size, method='mean')
+    binary_mask = ccimage > adaptive_thresh
+
+    # Label initial ROIs
+    labeled_rois, num_features = label(binary_mask)
+
+    ### Filter small ROIs based on min_area
+    filtered_rois = np.zeros_like(labeled_rois)
+    current_label = 1
+    for i in range(1, num_features + 1):
+        roi_mask = labeled_rois == i
+        if np.sum(roi_mask) >= min_area:
+            filtered_rois[roi_mask] = current_label
+            current_label += 1
+
+    num_filtered = current_label - 1
+
+    end_time = time.time()
+    print(f"Elapsed time: {end_time - start_time:.2f} seconds")
+    print(f"Number of ROIs detected (after filtering): {num_filtered}")
+
+    return ccimage, filtered_rois
+
+
 def stats_boxplot(statlog, df,x, y, hue , lh = True):
     """calculates wilcoxon, or ttest (depending on shapiro wilk normality result) and saves p value, and sig level in txtfile
     statlog : full path to txt file
@@ -161,6 +219,7 @@ class dataset:
         folder : str
             Path to dataset folder, output of UI
         """
+        self.today = date.today()
         self.sort = f'{folder}/0_to_sort'
         self.raw = f'{folder}/1_raw_recordings'
         self.processed = f'{folder}/2_processed_recordings'
@@ -171,6 +230,7 @@ class dataset:
         self.stim = f'{folder}/0_to_sort/stim'
         self.zstacks = f'{folder}/5_ZStacks'
         self.stimdata = f'{folder}/6_stim_files'
+        self.errorlog = f'{folder}/reprocessing_error_log_{self.today}.txt'
 
 def rename_Tseries(data_path):
     """renames all TSeries to match a common pattern, without dublicates, to make further steps easier
@@ -1636,7 +1696,7 @@ def processXmlInfo(data_path):
     return imaging_info
 
 
-def selectManualROIs(image_to_select_from, image_cmap ="gray", ask_name=True):
+def selectManualROIs(image_to_select_from, image_cmap ="gray", ask_name=True, xcorrimg=None):
     '''Enables user to select rois from a given image using roipoly module
     
     Parameters
@@ -1663,7 +1723,13 @@ def selectManualROIs(image_to_select_from, image_cmap ="gray", ask_name=True):
     plt.style.use("dark_background")
     while (stopsignal==0):
         # Show the image
-        fig = plt.figure()
+        # fig = plt.figure()
+
+        fig = plt.figure(figsize=(8, 6))
+        plt.subplot(1, 2, 1)
+        plt.imshow(xcorrimg[0].T, cmap='Spectral')
+        plt.title('Cross-Correlation Image')
+        plt.subplot(1, 2, 2)
         plt.imshow(image_to_select_from, interpolation='nearest', cmap=image_cmap)
         plt.colorbar()
         curr_agg = mask_agg.copy()
@@ -1691,7 +1757,7 @@ def selectManualROIs(image_to_select_from, image_cmap ="gray", ask_name=True):
             stopsignal = 1
     return roi_masks, mask_names
 
-def selectROIs(extraction_type, error_log,image_to_select):
+def selectROIs(extraction_type, error_log,image_to_select, xcorrimg=None):
     '''Extraction of ROIS
     
     Parameters
@@ -1720,9 +1786,9 @@ def selectROIs(extraction_type, error_log,image_to_select):
         plt.close('all')
         plt.style.use("default")
         print('\n\nSelect categories and background')
-        cat_masks, cat_names = selectManualROIs(image_to_select, image_cmap="gray")
+        cat_masks, cat_names = selectManualROIs(image_to_select, image_cmap="gray", xcorrimg=xcorrimg)
         print('\n\nSelect ROIs')
-        roi_masks, roi_names = selectManualROIs(image_to_select, image_cmap="gray",ask_name=False)
+        roi_masks, roi_names = selectManualROIs(image_to_select, image_cmap="gray",ask_name=False, xcorrimg=xcorrimg)
         return cat_masks, cat_names, roi_masks, roi_names
     else:
         open(error_log, 'a', encoding="utf8").write(f'ROI extraction type not defined >> check documentation')

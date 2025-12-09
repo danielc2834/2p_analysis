@@ -8,6 +8,8 @@ dataset_folder, error_log, metadata_path = my_input[1], my_input[2], my_input[3]
 paths = core_pre.dataset(dataset_folder)
 df_meta = pd.read_excel(metadata_path, sheet_name=paths.name) 
 tseries_list = df_meta['TSeries'].tolist()
+name = os.path.basename(__file__)
+open(error_log, 'a', encoding="utf8").write(f'\nscript used: {name}\n')
 with open(f'{paths.processed}/processing_progress.pkl', 'rb') as fi:
     processing_progress = pickle.load(fi)
 ###############################
@@ -23,12 +25,15 @@ else:
             source = f'{paths.sort}/{fly}/{tseries}'
             if tseries.startswith("TSeries"):
                 number=tseries.split('-')[-1]
-                if f'Tseries-{number}' not in tseries_list:
+                number = number[-1] if number [-2] == "0" else number[-2:]
+                # if f'Tseries-{number}' not in tseries_list:
+                if int(number) not in tseries_list:
                     open(error_log, 'a', encoding="utf8").write(f'{fly}/{tseries} : no metadata found')
                     open(error_log, 'a', encoding="utf8").write('\n')
                     continue
                 else:
-                    df_meta_one = df_meta_fly[df_meta_fly['TSeries']==f'Tseries-{number}']
+                    # df_meta_one = df_meta_fly[df_meta_fly['TSeries']==f'Tseries-{number}']
+                    df_meta_one = df_meta_fly[df_meta_fly['TSeries']==int(number)]
                     tseries_con = core_pre.get_condition_tseries(df_meta_one, preprocessing_params.condition_columns)
                     destination = f'{paths.raw}/{tseries_con}/{fly}/{tseries}'
                     os.makedirs(destination, exist_ok=True)

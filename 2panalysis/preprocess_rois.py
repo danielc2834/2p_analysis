@@ -16,9 +16,12 @@ paths = core_pre.dataset(dataset_folder)
 df_meta = pd.read_excel(metadata_path, sheet_name=paths.name) 
 with open(f'{paths.processed}/processing_progress.pkl', 'rb') as fi:
     processing_progress = pickle.load(fi)
+name = os.path.basename(__file__)
+open(error_log, 'a', encoding="utf8").write(f'\nscript used: {name}\n')
 ################################
 # config_path = f'C:/Master_Project/Code\master_2p/2panalysis\config.yaml'
-config_path = 'F:/Studium/M.Sc/aktuell/Master Projectwork/master_2p/2panalysis/config.yaml'
+# config_path = 'F:/Studium/M.Sc/aktuell/Master Projectwork/master_2p/2panalysis/config.yaml'
+config_path = '2panalysis/config.yaml'
 # config_path = r"C:\Master_Project\Code\master_2p\2panalysis\config.yaml"
 with open(config_path, 'r') as config_file:
     config = yaml.safe_load(config_file)
@@ -48,6 +51,8 @@ else:
     load_categories=False 
 
 for condition in os.listdir(paths.processed):
+    if condition.endswith('_h') or condition.endswith('_v'):
+        continue
     if condition.endswith(".pkl"):
             continue
     print(condition)
@@ -76,7 +81,9 @@ for condition in os.listdir(paths.processed):
             if tseries.startswith("TSeries"):
                 
                 current_number=tseries.split('-')[-1]
-                meta_tseries = meta_fly[meta_fly.TSeries==f'Tseries-{current_number}']
+                current_number = current_number[-1] if current_number [-2] == "0" else current_number[-2:]
+                # meta_tseries = meta_fly[meta_fly.TSeries==f'Tseries-{current_number}']
+                meta_tseries = meta_fly[meta_fly['TSeries']==int(current_number)]
                 motion_target = f'{paths.processed}/{condition}/{fly}/{tseries}'
                 if len(preprocessing_params.experiment)>0:
                     target = f'{paths.processed}/{condition}/{fly}/{tseries}/{preprocessing_params.experiment}'
@@ -121,6 +128,27 @@ for condition in os.listdir(paths.processed):
                 if visual_stim == '155s 1_Dirfting_edges_JF_8dirs_ON_first':
                     analysis_type = ['8D_edges_find_rois_save']
                     dFmethod = ['rolling_mean']
+                elif visual_stim == '2.4_Stripe_1sec_1secBG_5deg_ver_random_LumInc':
+                    analysis_type = ["stripes_ON_vertRF_transfer"]#['gratings_transfer_rois_save'] #moving_gratings, luminance_gratings
+                    dFmethod = ['rolling_mean']
+                elif visual_stim == '2.2_Stripe_1sec_1secBG_5deg_hor_random_LumInc':
+                    analysis_type = ["stripes_ON_horRF_transfer"]#['gratings_transfer_rois_save'] #moving_gratings, luminance_gratings
+                    dFmethod = ['rolling_mean']
+                elif visual_stim == '2.3_Stripe_1sec_1secBG_5deg_ver_random_LumDec':
+                    analysis_type = ["stripes_OFF_vertRF_transfer"]#['gratings_transfer_rois_save'] #moving_gratings, luminance_gratings
+                    dFmethod = ['rolling_mean']
+                elif visual_stim == '2.1_Stripe_1sec_1secBG_5deg_hor_random_LumDec':
+                    analysis_type = ["stripes_OFF_horRF_transfer"]#['gratings_transfer_rois_save'] #moving_gratings, luminance_gratings
+                    dFmethod = ['rolling_mean']
+                elif visual_stim == '2.4_Stripe_1sec_1secBG_5deg_ver_random_LumInc' or visual_stim == '2.3_Stripe_1sec_1secBG_5deg_ver_random_LumDec'\
+                    or visual_stim == '2.2_Stripe_1sec_1secBG_5deg_hor_random_LumInc' or visual_stim == '2.1_Stripe_1sec_1secBG_5deg_hor_random_LumDec'\
+                    or visual_stim == '3.1_StimulusData_Discrete_1_16_100000_El_50ms _H' or visual_stim == '3.2_StimulusData_Discrete_1_16_100000_El_50ms_V'\
+                    :
+                    continue
+                elif 'Chirp' in visual_stim:
+                    analysis_type = ['olfaction']#['gratings_transfer_rois_save'] #moving_gratings, luminance_gratings
+                    dFmethod = ['rolling_mean']
+
                 elif visual_stim == '155s 3_Gratings_sine_30degwl_1hz_dir90_270_0_180deg':
                     analysis_type = ["luminance_gratings"]#['gratings_transfer_rois_save'] #moving_gratings, luminance_gratings
                     dFmethod = ['rolling_mean']
@@ -174,8 +202,10 @@ for condition in os.listdir(paths.processed):
                         roi_masks = skipping_masks[fly][str(same_rois_meta)].get('roi_masks')
                         cat_names = skipping_masks[fly][str(same_rois_meta)].get('cat_names')
                         roi_names = skipping_masks[fly][str(same_rois_meta)].get('roi_names')
+                    time_series = io.imread(f'{motion_target}/_motCorr.tif')
                     if skip == False:
-                        cat_masks, cat_names, roi_masks, roi_names = core_pre.selectROIs(preprocessing_params.roi_extraction_type,error_log,mean_image)
+                        xcorrimg = core_pre.CrossCorrImage(time_series.T,block_size = 5, w = 1)
+                        cat_masks, cat_names, roi_masks, roi_names = core_pre.selectROIs(preprocessing_params.roi_extraction_type,error_log,mean_image,xcorrimg)
                         core_pre.save_roi_images(target, mean_image, cat_masks, roi_masks, cat_names, roi_names)
                         for idx, cat_name in enumerate(cat_names):
                             if cat_name.lower() == 'bg':
@@ -203,7 +233,6 @@ for condition in os.listdir(paths.processed):
                         core_pre.save_roi_images(target, mean_image, cat_masks, roi_masks, cat_names, roi_names)
                     with open(f'{skipping_target}_skipping_masks.pkl', 'wb') as fo:
                         pickle.dump(skipping_masks, fo)
-                    time_series = io.imread(f'{motion_target}/_motCorr.tif')
                     if analysis_type[0] == 'olfaction':
                         time_series = np.transpose(np.subtract(np.transpose(time_series),
                                                             time_series[:,bg_mask].mean(axis=1)))
@@ -236,21 +265,25 @@ for condition in os.listdir(paths.processed):
                         
                         # print(current_movie_ID)                       
                         currentTseries = time_series.astype(float) 
+                        
+                        
 
-                        (wholeTraces_allTrials_video, respTraces_allTrials, 
-                                baselineTraces_allTrials) = \
-                                    pmc.separate_trials_video(currentTseries,stimulus_information,
-                                    imaging_information['frame_rate'])
+                        if 'Chirp' not in visual_stim:
+                            (wholeTraces_allTrials_video, respTraces_allTrials, 
+                                    baselineTraces_allTrials) = \
+                                        pmc.separate_trials_video(currentTseries,stimulus_information,
+                                        imaging_information['frame_rate'])
                         
                         ###########################################
                         ######### background subtraction #############            
                         ###########################################
-                    
-                        
-                        pmc.calculate_background_ROIs(bg_mask,rois,in_phase=preprocessing_params.in_phase_bg_subtraction)
-                        
 
-
+                            
+                            pmc.calculate_background_ROIs(bg_mask,rois,in_phase=preprocessing_params.in_phase_bg_subtraction)
+                            list(map(lambda roi: roi.appendStimInfo(stimulus_information), rois))
+                        # if "Chirp" in visual_stim:
+                        #     rois = pmc.whole_stim_experiment(rois)
+                        # else:
                         ###########################################
                         ######### append stimulus information to ROI objects #############            
                         ###########################################
@@ -258,16 +291,55 @@ for condition in os.listdir(paths.processed):
                         
                         
                         
-                        list(map(lambda roi: roi.appendStimInfo(stimulus_information), rois))
                         
                         
                         
-                        (wholeTraces_allTrials_ROIs, respTraces_allTrials_ROIs,
-                        baselineTraces_allTrials_ROIs) = \
-                            pmc.separate_trials_ROI_v4(currentTseries,rois,rois[0].stim_info,
-                                                    rois[0].imaging_info['frame_rate'],
-                                                    df_method = analysis_params['deltaF_method'][cycle],mov_av=False,analysis_type=analysis_params['analysis_type'][cycle])
-                        
+                            
+                            (wholeTraces_allTrials_ROIs, respTraces_allTrials_ROIs,
+                            baselineTraces_allTrials_ROIs) = \
+                                pmc.separate_trials_ROI_v4(currentTseries,rois,rois[0].stim_info,
+                                                        rois[0].imaging_info['frame_rate'],
+                                                        df_method = analysis_params['deltaF_method'][cycle],mov_av=False,analysis_type=analysis_params['analysis_type'][cycle])
+                        else:
+                            time_series = np.transpose(np.subtract(np.transpose(time_series),
+                                       time_series[:,bg_mask].mean(axis=1)))
+                            print('\nBackground subtraction done...')
+                            list(map(lambda roi: roi.appendStimInfo(stimulus_information), rois))
+                            def getTimeTraces(rois, time_series,df_method = 'mean'):
+                                """ Computes the time traces of each ROI given a time series """
+                                # dF/F calculation
+                                for roi in rois:
+                                    roi.raw_trace = time_series[:,roi.mask].mean(axis=1)
+                                    roi.calculateDf(stimulus_information, method=df_method[0],moving_avg = False)
+                                return rois
+                            rois = getTimeTraces(rois,time_series,analysis_params['deltaF_method'])
+                            rois = pmc.whole_stim_experiment(rois)
+
+                            def plotAllTraces(rois, fig_save_dir = None):
+                                plt.close('')
+                                plt.style.use('default')
+                                stim_vals = rois[0].stim_info['processed']['epoch_trace_frames']
+                                stim_vals = stim_vals/stim_vals.max()
+                                stim_vals -= stim_vals.min()
+                                plt.plot(stim_vals,'--', lw=1, alpha=.6,color='k')
+
+                                scaler = float(len(rois))
+                                for idx, roi in enumerate(rois):
+                                    plot_trace = (roi.df_trace+idx)/scaler
+                                    plt.plot(plot_trace,lw=1/3.0, alpha=1)
+
+                                plt.xlabel('Frames')
+                                plt.title(rois[0].experiment_info['MovieID'])
+                                fig = plt.gcf()
+
+                                if fig_save_dir is not None:
+                                    f_name = 'Traces_%s' % (rois[0].experiment_info['MovieID'])
+                                    os.chdir(fig_save_dir)
+                                    fig.savefig('%s.png'% f_name, bbox_inches='tight',transparent=False,dpi=300)
+                                    plt.gcf()
+
+                                return fig
+                            plotAllTraces(rois,fig_save_dir=summary_save_dir)
                         ###########################################
                         ######### run df/f and analysis #############            
                         ###########################################

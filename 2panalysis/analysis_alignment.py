@@ -91,7 +91,9 @@ import core_preprocessing as core_pre
     '''
 #align all to same fps
 # dataset_folder = 'C:/Master_Project/2P/datasets/241203_whole_OL'
-dataset_folder = r'F:\Master\241203_whole_OL'
+# dataset_folder = r'F:\Master\241203_whole_OL'
+dataset_folder = r'C:\phd\02_twophoton\251023_tdc2_cschr_pan'
+
 # dataset_folder = r'F:\Master\250219_moving_bar'
 paths = core_pre.dataset(dataset_folder)
 # if len(preprocessing_params.experiment)>0:
@@ -125,7 +127,7 @@ for condition in os.listdir(paths.data):
                 #     if category == 'pulse' or category == 'on':
                 #         continue
                 #     all_fps.append(data[tseries][category]['frame_rate'])
-mean_fps_LH = int(sum(all_fps_LH) / len(all_fps_LH))
+# mean_fps_LH = int(sum(all_fps_LH) / len(all_fps_LH))
 mean_fps = int(sum(all_fps) / len(all_fps))
 #interpolate to mean fps
 def align_traces_per_epoch(rois,key,grating):
@@ -202,21 +204,21 @@ for condition in os.listdir(paths.data):
             with open(f'{paths.data}/{condition}', 'rb') as fi:
                 data = pickle.load(fi)
             # data['alligned_fps'] = mean_fps_LH
-            for tseries in data:
-                # if tseries == 'alligned_fps':
-                #         continue
-                for roi in data[tseries]['final_rois']:
-                    roi.alligned_fps = mean_fps_LH
-                    trace = roi.df_trace
-                    fps_curr = roi.imaging_info.get('frame_rate')
-                    stim_duration = len(trace)/fps_curr
-                    time_curr = np.linspace(0, stim_duration, len(trace))
-                    time_ref = np.linspace(0, stim_duration,  int(mean_fps_LH*stim_duration))
-                    new_df = np.interp(time_ref, time_curr, trace)
-                    roi.interpolated_traces_all = new_df
-                    roi.interpolated_time_all = time_ref
-            with open(f'{paths.data}/{condition}', 'wb') as fo:
-                pickle.dump(data, fo) 
+            # for tseries in data:
+            #     # if tseries == 'alligned_fps':
+            #     #         continue
+            #     for roi in data[tseries]['final_rois']:
+            #         roi.alligned_fps = mean_fps_LH
+            #         trace = roi.df_trace
+            #         fps_curr = roi.imaging_info.get('frame_rate')
+            #         stim_duration = len(trace)/fps_curr
+            #         time_curr = np.linspace(0, stim_duration, len(trace))
+            #         time_ref = np.linspace(0, stim_duration,  int(mean_fps_LH*stim_duration))
+            #         new_df = np.interp(time_ref, time_curr, trace)
+            #         roi.interpolated_traces_all = new_df
+            #         roi.interpolated_time_all = time_ref
+            # with open(f'{paths.data}/{condition}', 'wb') as fo:
+            #     pickle.dump(data, fo) 
                 # if tseries == 'alligned_fps':
                 #         continue
                 # for category in data[tseries]:

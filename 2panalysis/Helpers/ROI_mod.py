@@ -1181,6 +1181,8 @@ class ROI_bg:
                 self.reliability_all_epochs_ON[iEpoch_index] = np.array(coeff_on).mean()
                 self.reliability_all_epochs_OFF[iEpoch_index] = np.array(coeff_off).mean()
                 self.reliability_all_epochs[iEpoch_index] = np.array(curr_coeff_general).mean()
+            elif "Chirp" in self.stim_info['stim_name']:
+                continue
             else:
                 # calculate reliability independent for every epoch
                 for _, pair in enumerate(perm):

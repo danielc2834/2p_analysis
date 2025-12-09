@@ -51,7 +51,24 @@ import tifffile
 import cv2
 
 
-
+def whole_stim_experiment(rois):
+    stim_info = rois[0].stim_info 
+    stim_coords = stim_info['trial_coordinates']
+    for roi in rois:
+        # Generate stimulation trace for whole experiment
+        stim_trace_all = roi.stim_info['epoch_trace_frames']
+        stim_trace=np.zeros([5,len(stim_trace_all)])
+        for idx2, stim_property in enumerate(list(roi.stim_info['meta']['epoch_infos']['epoch_1'].keys())[1:6]):
+            curr_stim = np.zeros((1,len(stim_trace_all)))[0]
+            for idx, e in enumerate(stim_trace_all):
+                try:
+                    curr_stim[idx] = roi.stim_info['meta']['epoch_infos'][list(stim_coords)[int(e-1)]][stim_property]
+                except:
+                    curr_stim[idx] = np.mean(roi.stim_info['meta']['epoch_infos'][list(stim_coords)[int(e-2)]][stim_property],roi.stim_info['meta']['epoch_infos'][list(stim_coords)[int(e)]][stim_property])
+                stim_trace[idx2,:]=curr_stim
+        
+        roi.whole_stim_experiment = stim_trace
+    return rois
 
     
 def compute_correlation_image(video):
@@ -1661,6 +1678,7 @@ def separate_trials_ROI_v4(time_series,rois,stimulus_information,frameRate,
         base_lens = []
         for curr_trial_coor in currentEpoch:
             current_trial_length = curr_trial_coor[0][1]-curr_trial_coor[0][0]
+            # current_trial_length = curr_trial_coor[1]-curr_trial_coor[0]
             trial_lens.append(current_trial_length)
             
             baselineStart = curr_trial_coor[1][0]
@@ -2691,7 +2709,6 @@ def run_analysis(analysis_params, rois,experiment_conditions,
             
         ax = sns.heatmap(all_rfs_sorted)
         ax.set_xticklabels(rois[1].RF_profile_coords)
-          
     elif ((analysis_type == 'stripes_ON_vertRF_transfer') or \
           (analysis_type == 'stripes_ON_horRF_transfer') or \
           (analysis_type == 'stripes_OFF_vertRF_transfer') or \
@@ -2899,7 +2916,8 @@ def run_analysis(analysis_params, rois,experiment_conditions,
         # ROI_mod.reverse_correlation_analysis_JF(rois,kwargs['stim_dir']) #for 17ms update or [[0, 250]] for 50ms update
         # test_frames=[[0, 307], [924, 1231], [1848, 2155]]
         # test_frames=[[0,1200],[3600, 4800],[7200,8400]]    
-
+    elif analysis_type == 'chirp':
+        foo = 1  
         
     return rois
             

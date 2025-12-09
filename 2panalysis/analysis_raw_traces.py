@@ -8,7 +8,7 @@ import matplotlib.patches as mpatches
 ################################################
 # dataset_folder = 'C:/Master_Project/2P/datasets/241203_whole_OL'
 # dataset_folder =r'F:\241203_whole_OL'
-dataset_folder = r'F:\250219_moving_bar'
+dataset_folder = r'C:\phd\02_twophoton\251023_tdc2_cschr_pan'
 # error_log = 'C:/2p/'
 paths = core_pre.dataset(dataset_folder)
 if preprocessing_params.experiment == 'big':

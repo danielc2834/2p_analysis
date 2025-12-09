@@ -9,6 +9,8 @@ from napari.settings import get_settings
 my_input = sys.argv
 dataset_folder, error_log = my_input[1], my_input[2]
 paths = core_pre.dataset(dataset_folder)
+name = os.path.basename(__file__)
+open(error_log, 'a', encoding="utf8").write(f'\nscript used: {name}\n')
 # dataset_path = 'C:/Users/Christian/Desktop/2P_test'
 # error_log = 'C:/Users/Christian/Desktop/2P_test/preprocessing_error_log_2025-01-17.txt'
 with open(f'{paths.processed}/processing_progress.pkl', 'rb') as fi:
@@ -85,8 +87,8 @@ for condition in os.listdir(paths.raw):
                         processing_progress[condition][fly][tseries] = [True, False, False, False]
                         viewer.close_all()
                     napari.run()
-with open(f'{paths.processed}/processing_progress.pkl', 'wb') as fo:
-        pickle.dump(processing_progress, fo)
+    with open(f'{paths.processed}/processing_progress.pkl', 'wb') as fo:
+            pickle.dump(processing_progress, fo)
 
 #removes motion correection data that were no good
 for condition in processing_progress.keys():

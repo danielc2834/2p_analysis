@@ -20,17 +20,21 @@ opts_dict = {
 caiman_params = CNMFParams(params_dict=opts_dict)
 ################################################ ROI SELECTION ################################################
 roi_extraction_type = 'manual' #how ROIS will be selected, cuurently just 'manual'
+roi_manual_type = 'burak_legacy' #burak_legacy, napari
 # 'cluster analysis MH_JF'
-experiment = 'layer' #name that will be added in front of all outputs, in case you want to analyse data two times, so it doesnt overwrite or delete previous data, FOR ROI selection, not motion correction, if no need > empty str
+experiment = '' #name that will be added in front of all outputs, in case you want to analyse data two times, so it doesnt overwrite or delete previous data, FOR ROI selection, not motion correction, if no need > empty str
 same_rois = True #true if same rois across tseries
-same_rois_columns = ['region'] #uses columns in metadat to determine which rois are the same, will use them to automatically generate traces for next tseries
-z_range =  20 #range in zmotion that assigns same roi to other tseries, difference in depth is outside range > select new rois; depth = depth*step_size == micro
+# same_rois_columns = ['region']
+same_rois_columns = ['genotype'] #fly. uses columns in metadat to determine which rois are the same, will use them to automatically generate traces for next tseries
+z_range =  10 #range in zmotion that assigns same roi to other tseries, difference in depth is outside range > select new rois; depth = depth*step_size == micro
 in_phase_bg_subtraction = False
 ################################################ ADDING STIMULI ################################################
-olfactory_stimuli = {'pulse' : [5,5,5,20,5], 'on' : 341} #for step: [pre,stim,post,ISI,repetition], for "on" : lenth of stimulus
+olfactory_stimuli = {'pulse' : [5,5,5,20,5], 'on' : 341} #for step: [pre,stim,post,ISI,repetition], for "on" : lenth of stimulus, currently: pulse and on > if you want to define new ones do so in core_preprocessing.olf_stim_array
 ################################################ DATA POOLING ################################################
-condition_columns = ['odorant', 'olf_stim', 'visual_stim', 'region'] #columns used in metadatasheet to make different conditions , currently: pulse and on > if you want to define new ones do so in core_preprocessing.olf_stim_array
-
+# condition_columns = ['visual_stim', 'genotype'] #columns used in metadatasheet to make different conditions 
+# condition_columns = ['visual_stim', 'LED', "region", 'Retinal'] #tdc act
+# condition_columns = ['region', 'olf_stim'] #OA in OL
+condition_columns = ['genotype', 'visual_stim'] #degen var
 
 ################################################ DOCUMENTATION ################################################
 #bleedtrough_correction >> whether bleadtrough (from visual stimulus) will be corrected while correcting the recordings for motion, boolean, default=True

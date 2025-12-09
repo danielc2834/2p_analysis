@@ -26,7 +26,7 @@ print('organizing datastructures')
 core_pre.check_folder_structure(paths.folder)
 with open(f'{paths.processed}/processing_progress.pkl', 'rb') as fi:
     processing_progress = pickle.load(fi)
-print('renaming files')
+# print('renaming files')
 core_pre.rename_Tseries(paths.sort)
 #gets stim for each tseries from stim folder before moving to condition folderb
 print('moving stimulus files')
@@ -38,7 +38,7 @@ if motion_alignment == 0:
     print("aligning motion")
     subprocess.run(['python', "2panalysis/preprocess_motion.py", paths.folder, error_log])
 if select_rois == 0:
-    print('main analysis')
+    print('selecting & processing ROIs')
     subprocess.run(['python', "2panalysis/preprocess_rois.py", paths.folder, error_log, metadata_path])
 # pooling to make DATA for analysis_odor_responses, and raw_traces >> TODO:change if time
 print('pooling DATA')

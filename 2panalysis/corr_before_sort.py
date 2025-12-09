@@ -1,0 +1,1476 @@
+import numpy as np
+import tifffile as tiff
+import matplotlib.pyplot as plt
+import napari, os
+from pathlib import Path
+from skimage.draw import polygon
+import pandas as pd
+"""
+Phase Randomization testet die Null-Hypothese:
+
+"Gibt es eine spezifische zeitliche Beziehung zum Stimulus, die nicht durch die intrinsische Frequenzstruktur des Signals erklärt werden kann?"
+"""
+'''data matrix called trace_mat with shape T × P:
+
+T = number of time points (frames)
+P = number of pixels inside the ROI
+one pixel’s trace normalized to zero mean and unit variance
+
+Take one pixel inside the ROI. Across time, it has a fluorescence time series (a vector of length T). That’s that pixel’s “trace.”
+You subtract that pixel’s own average over time, so its mean becomes 0. This centers the trace.
+You divide by that pixel’s own standard deviation over time, so its variability becomes 1. This scales the trace.
+
+
+Why do this? Because once both the pixel traces and the stimulus vector are standardized, the dot-product averaged over time becomes the Pearson correlation coefficient for each pixel vs the stimulus.
+
+'''
+'''Control 1: shuffle_before_dff
+
+Phase-randomisiert den gesamten Stack VOR der dF/F-Berechnung
+Testet: Ob die gefundenen Pixel durch zufällige zeitliche Muster entstehen könnten
+Erwartung: Sollte deutlich weniger Pixel finden als echte Daten
+
+Control 2: shuffle_after_filter
+
+Phase-randomisiert die gefilterten Pixel-Traces NACH der Response-Selektion
+Testet: Ob die Korrelation zum Stimulus echt ist oder nur durch die dF/F-Änderungen entsteht
+Erwartung: Sollte ähnlich viele Pixel finden (weil Response-Filter gleich bleibt), aber niedrigere Korrelation'''
+
+
+'''What correlation is being computed?
+for each pixel inside the original ROI, the Pearson correlation between its fluorescence trace and the stimulus time course.
+
+trace_mat is the time-by-pixel matrix of z-scored fluorescence within the ROI: each column is one pixel’s trace normalized to zero mean and unit variance.
+s is the stimulus vector, also z-scored to zero mean and unit variance.
+corr = (trace_mat * s[:, None]).mean(axis=0) takes the elementwise product between each pixel’s normalized trace and the normalized stimulus across time, then averages across time. Because both sides are standardized, that mean is exactly the Pearson correlation coefficient between the pixel’s trace and the stimulus.
+each entry of corr is the correlation coefficient r in [-1, 1] for one ROI pixel versus the stimulus.
+
+How is the threshold defined for picking ROIs?
+ mean + 2·std
+thr = corr.mean() + 2.0 * corr.std()
+
+roi_mask_refined[roi_mask] = corr >= thr
+
+If most pixels have low or modest correlation, only the most strongly stimulus-locked pixels (the right tail of the correlation distribution) will pass.
+
+'''
+#TODO: tunable laser
+#TODO: fitler swap
+      
+
+processed_recordings = 'C:/phd/02_twophoton/250611_OA_odor_OL/2_processed_recordings'
+metasheet = r"C:\phd\02_twophoton\metadata.xlsx"
+metadata = pd.read_excel(metasheet, sheet_name="250611_OA_odor_OL") 
+
+
+
+def phase_randomize_stack_vectorized(stack, seed=None):
+    """
+    Vectorized phase randomization for image stacks.
+    Much faster for large datasets.
+    """
+    if seed is not None:
+        np.random.seed(seed)
+    
+    n_frames, height, width = stack.shape
+    
+    # Reshape to (n_frames, n_pixels)
+    stack_reshaped = stack.reshape(n_frames, -1)
+    
+    # FFT along time axis
+    fft = np.fft.fft(stack_reshaped, axis=0)
+    amplitude = np.abs(fft)
+    
+    # Generate random phases for all pixels
+    n_pixels = height * width
+    random_phase = np.random.uniform(0, 2*np.pi, (n_frames, n_pixels))
+    random_phase[0, :] = 0  # DC component
+    if n_frames % 2 == 0:
+        random_phase[n_frames//2, :] = 0  # Nyquist
+    
+    # Reconstruct with random phases
+    randomized_fft = amplitude * np.exp(1j * random_phase)
+    
+    # Inverse FFT
+    shuffled = np.real(np.fft.ifft(randomized_fft, axis=0))
+    
+    # Reshape back to original dimensions
+    return shuffled.reshape(n_frames, height, width)
+
+
+def phase_randomize_trace(trace, seed=None):
+    """
+    Phase randomization for 1D traces (averaged data).
+    """
+    if seed is not None:
+        np.random.seed(seed)
+    
+    # FFT
+    fft = np.fft.fft(trace)
+    amplitude = np.abs(fft)
+    
+    # Random phases (keep DC and Nyquist real)
+    n = len(trace)
+    random_phase = np.random.uniform(0, 2*np.pi, n)
+    random_phase[0] = 0  # DC component
+    if n % 2 == 0:
+        random_phase[n//2] = 0  # Nyquist frequency
+    
+    # Reconstruct with random phases
+    randomized_fft = amplitude * np.exp(1j * random_phase)
+    
+    # Inverse FFT
+    shuffled = np.real(np.fft.ifft(randomized_fft))
+    
+    return shuffled
+
+def phase_randomize_traces(traces, seed=None):
+    """
+    Phase randomization for 2D array of traces (time x pixels).
+    
+    Parameters:
+    -----------
+    traces : array (T, n_pixels)
+        Time series for multiple pixels
+    seed : int, optional
+        Random seed
+    
+    Returns:
+    --------
+    array : Phase-randomized traces
+    """
+    if seed is not None:
+        np.random.seed(seed)
+    
+    n_frames, n_pixels = traces.shape
+    
+    # FFT along time axis
+    fft = np.fft.fft(traces, axis=0)
+    amplitude = np.abs(fft)
+    
+    # Generate random phases for all pixels
+    random_phase = np.random.uniform(0, 2*np.pi, (n_frames, n_pixels))
+    random_phase[0, :] = 0  # DC component
+    if n_frames % 2 == 0:
+        random_phase[n_frames//2, :] = 0  # Nyquist
+    
+    # Reconstruct with random phases
+    randomized_fft = amplitude * np.exp(1j * random_phase)
+    
+    # Inverse FFT
+    shuffled = np.real(np.fft.ifft(randomized_fft, axis=0))
+    
+    return shuffled
+
+def interpolate_to_mean_fps(data_dict, mean_fps):
+    """interpolates data of dictionary to mean fps of whole dataset
+    
+    Parameters:
+    -----------
+    data_dict: dict
+        includes mean of 
+    mean_fps: float
+        mean fps of whole dataset
+    
+    Returns
+    -------
+    data_dict: dict
+        adjusted and interpolated data
+    """
+    interpolated_data_dict= {}
+    for direction in data_dict:
+        interpolated_data_dict[direction] = {}
+        for meassure in data_dict[direction]:
+            if meassure=='dff_mean' or meassure == 'pulse_mean':
+                dff = data_dict[direction][meassure]
+                fps_curr = data_dict[direction]['fps']
+                stim_duration = len(dff)/fps_curr
+                time_curr = np.linspace(0, stim_duration, len(dff))
+                time_ref = np.linspace(0, stim_duration,  int(mean_fps*stim_duration))
+                dff_interpolated = np.interp(time_ref, time_curr, dff)
+                interpolated_data_dict[direction] = {meassure : dff_interpolated, 'fps_curr':fps, 'fps': mean_fps}
+
+    return interpolated_data_dict
+
+def average_across_flies(data_dict):
+    """
+    Calculate average of dff and dff_mean_pixels across all TSeries.
+    
+    Parameters:
+    -----------
+    data_dict : dict
+        Dictionary with structure: {tseries_name: {'positive': {...}, 'negative': {...}}}
+    
+    Returns:
+    --------
+    dict : Averaged data for positive and negative directions
+    """
+    
+    averaged_data = {'positive': {}, 'negative': {}}
+    
+    for direction in ['positive', 'negative']:
+        # Collect all dff arrays
+        dff_arrays = []
+        for fly_name, flys_data in data_dict.items():
+            if direction in flys_data:
+                try:
+                    dff_arrays.append(flys_data[direction]['dff_mean'])
+                    what = 'dff'
+                except:
+                    dff_arrays.append(flys_data[direction]['pulse_mean'])
+                    what = 'pulse'
+                fps = flys_data[direction]['fps']
+        # Find minimum length to handle different array lengths
+        if dff_arrays:
+            # Truncate all arrays to minimum length and stack
+            min_len = min(len(p) for p in dff_arrays)
+            dff_stacked = np.array([arr[:min_len] for arr in dff_arrays])
+
+            # Calculate mean across all TSeries (axis=0)
+            averaged_data[direction][f'{what}_mean'] = np.mean(dff_stacked, axis=0)
+            averaged_data[direction][f'{what}_std'] = np.std(dff_stacked, axis=0)
+            averaged_data[direction][f'{what}_sem'] = np.std(dff_stacked, axis=0) / np.sqrt(len(dff_arrays))
+            averaged_data[direction]['n_flies'] = len(dff_arrays)
+            averaged_data[direction]['fps'] = fps
+    return averaged_data
+
+
+# --- Timing and protocol ---
+def average_across_tseries(data_dict):
+    """
+    Calculate average of dff and dff_mean_pixels across all TSeries.
+    
+    Parameters:
+    -----------
+    data_dict : dict
+        Dictionary with structure: {tseries_name: {'positive': {...}, 'negative': {...}}}
+    
+    Returns:
+    --------
+    dict : Averaged data for positive and negative directions
+    """
+    
+    averaged_data = {'positive': {}, 'negative': {}}
+    
+    for direction in ['positive', 'negative']:
+        # Collect all dff arrays
+        dff_arrays = []
+        for tseries_name, tseries_data in data_dict.items():
+            if direction in tseries_data:
+                for meassure in data_dict[tseries_name][direction]:
+                    if meassure=='dff_mean' or meassure == 'pulse_mean' or meassure == 'dff':
+                        dff_arrays.append(tseries_data[direction][meassure])
+                fps = tseries_data[direction]['fps']
+        # Find minimum length to handle different array lengths
+        if dff_arrays:
+            # Truncate all arrays to minimum length and stack
+            min_len = min(len(arr) for arr in dff_arrays)
+            dff_stacked = np.array([arr[:min_len] for arr in dff_arrays])
+            if ' dff_mean' in data_dict[tseries_name][direction].keys():
+                what = "dff"
+            elif "pulse_mean" in data_dict[tseries_name][direction].keys():
+                what = "pulse"
+            else:
+                what = 'dff'
+            # Calculate mean across all TSeries (axis=0)
+            averaged_data[direction][f'{what}_mean'] = np.mean(dff_stacked, axis=0)
+            averaged_data[direction][f'{what}_std'] = np.std(dff_stacked, axis=0)
+            averaged_data[direction][f'{what}_sem'] = np.std(dff_stacked, axis=0) / np.sqrt(len(dff_arrays))
+            averaged_data[direction]['n_tseries'] = len(dff_stacked)
+            averaged_data[direction]['fps'] = fps
+    return averaged_data
+
+def make_olf_protocoll(fps):
+    reps = 5
+    n_pre = int(5 * fps)
+    n_width = int(5 * fps)
+    n_post = int(5 * fps)
+    n_isi = int(20 * fps)
+    pre = np.zeros(n_pre, dtype=np.float32)
+    width = np.ones(n_width, dtype=np.float32)
+    post = np.zeros(n_post, dtype=np.float32)
+    isi = np.zeros(n_isi, dtype=np.float32)
+    protocol = np.hstack((pre, width))
+    for rep in range(reps - 1):
+        protocol = np.hstack((protocol, post, isi, pre, width))
+    protocol = np.hstack((protocol, post))
+    pulse_protocol = np.concatenate([np.zeros(n_pre),np.ones(n_width),np.zeros(n_post)])
+    return protocol, pulse_protocol
+
+def get_corr_pixels(substack, stim, roi_mask):
+    #TODO: cross correlation ( not just at pusl eonset frame)
+    #TODO implemetnt in all controls and in pulse correlation
+    T2 = substack.shape[0]
+    trace_mat = substack
+    trace_mat = trace_mat - trace_mat.mean(axis=0, keepdims=True)
+    stdx = trace_mat.std(axis=0, keepdims=True) + 1e-6
+    trace_mat = trace_mat / stdx
+    s = stim[:T2].astype(float)
+    s = s - s.mean()
+    s = s / (s.std() + 1e-6)
+    corr = (trace_mat * s[:, None]).mean(axis=0)
+    corr_map = np.zeros((H, W), dtype=float)
+    corr_map[roi_mask] = corr
+    thr_high = corr.mean() + 2.0 * corr.std()
+    thr_low = corr.mean() - 2.0 * corr.std()
+    roi_mask_refined = np.zeros((H, W), dtype=bool)
+    if direction == 'positive':
+        roi_mask_refined[roi_mask] = (corr >= thr_high)
+    else:
+        roi_mask_refined[roi_mask] = (corr <= thr_low)
+    roi_trace = stack[:, roi_mask_refined].mean(axis=1)
+    return roi_trace, roi_mask_refined, corr_map
+
+
+def get_corr_pixels_per_pulse(substack, pulse_protocol, roi_mask, reps, n_pre, n_width, n_post, n_isi, direction):
+    """
+    Calculate correlation for each pixel by cutting traces into pulse segments (pre+width+post).
+    Only pulse segments that correlate with the stimulus are selected and their traces extracted.
+    
+    Parameters:
+    -----------
+    substack : array (T, n_pixels)
+        Pixel traces within ROI
+    pulse_protocol : array
+        Single pulse protocol (pre + width + post)
+    roi_mask : array (H, W)
+        Boolean ROI mask
+    reps : int
+        Number of pulse repetitions (5)
+    n_pre, n_width, n_post, n_isi : int
+        Frame counts for protocol segments
+    direction : str
+        'positive' or 'negative'
+    
+    Returns:
+    --------
+    roi_trace : array
+        Mean of all selected pulse segments (length = pulse_length)
+    roi_mask_refined : array (H, W)
+        Boolean mask of pixels that have at least one valid pulse
+    corr_map : array (H, W)
+        Correlation map (mean of valid pulse correlations per pixel)
+    pulse_correlations : array (n_valid_pulses,)
+        Correlations for each selected pulse-pixel pair
+    """
+    T, n_pixels = substack.shape
+    H, W = roi_mask.shape
+    
+    # Calculate pulse segment boundaries
+    pulse_length = n_pre + n_width + n_post
+    onsets = []
+    idx = 0
+    for r in range(reps):
+        idx = idx + n_pre
+        onsets.append(idx)
+        idx = idx + n_width
+        if r < reps - 1:
+            idx = idx + n_post + n_isi
+        else:
+            idx = idx + n_post
+    onsets = np.array(onsets, dtype=int)
+    
+    # Extract pulse segments for each pixel
+    pulse_segments = []
+    for onset in onsets:
+        start = onset - n_pre
+        end = start + pulse_length
+        if end <= T:
+            segment = substack[start:end, :]
+            pulse_segments.append(segment)
+    
+    if len(pulse_segments) == 0:
+        roi_mask_refined = np.zeros((H, W), dtype=bool)
+        corr_map = np.zeros((H, W), dtype=float)
+        roi_trace = np.zeros(pulse_length)
+        return roi_trace, roi_mask_refined, corr_map, np.array([])
+    
+    pulse_segments = np.array(pulse_segments)  # Shape: (reps, pulse_length, n_pixels)
+    
+    # Normalize pulse protocol
+    s = pulse_protocol[:pulse_length].astype(float)
+    s = s - s.mean()
+    s = s / (s.std() + 1e-6)
+    
+    # Calculate correlation for each pulse-pixel pair
+    pulse_correlations = np.zeros((reps, n_pixels))
+    
+    for rep_idx in range(reps):
+        trace_mat = pulse_segments[rep_idx, :, :]  # Shape: (pulse_length, n_pixels)
+        trace_mat = trace_mat - trace_mat.mean(axis=0, keepdims=True)
+        stdx = trace_mat.std(axis=0, keepdims=True) + 1e-6
+        trace_mat = trace_mat / stdx
+        
+        # Calculate correlation for each pixel
+        corr = (trace_mat * s[:, None]).mean(axis=0)
+        pulse_correlations[rep_idx, :] = corr
+    
+    # Calculate threshold from ALL pulse-pixel correlations
+    all_corrs = pulse_correlations.flatten()
+    thr_high = all_corrs.mean() + 2.0 * all_corrs.std()
+    thr_low = all_corrs.mean() - 2.0 * all_corrs.std()
+    
+    # Filter each pulse-pixel pair independently
+    valid_pulse_mask = np.zeros((reps, n_pixels), dtype=bool)
+    
+    if direction == 'positive':
+        valid_pulse_mask = pulse_correlations >= thr_high
+    else:  # negative
+        valid_pulse_mask = pulse_correlations <= thr_low
+    
+    # Collect valid pulse segments and their correlations
+    valid_segments = []
+    valid_corrs = []
+    
+    for rep_idx in range(reps):
+        for pix_idx in range(n_pixels):
+            if valid_pulse_mask[rep_idx, pix_idx]:
+                # Extract this specific pulse segment for this pixel
+                segment = pulse_segments[rep_idx, :, pix_idx]
+                valid_segments.append(segment)
+                valid_corrs.append(pulse_correlations[rep_idx, pix_idx])
+    
+    # Create outputs
+    if len(valid_segments) > 0:
+        # Stack and average all valid segments to get one pulse-length trace
+        valid_segments = np.array(valid_segments)  # Shape: (n_valid_pulses, pulse_length)
+        roi_trace = valid_segments.mean(axis=0)  # Shape: (pulse_length,)
+        valid_corrs = np.array(valid_corrs)
+        
+        # Create pixel-level summary for masks and corr_map
+        # A pixel is selected if it has at least one valid pulse
+        selected_pixels = valid_pulse_mask.any(axis=0)
+        
+        # Correlation map: mean of valid correlations per pixel
+        mean_corr_per_pixel = np.zeros(n_pixels)
+        for pix_idx in range(n_pixels):
+            valid_pulses = valid_pulse_mask[:, pix_idx]
+            if valid_pulses.any():
+                mean_corr_per_pixel[pix_idx] = pulse_correlations[valid_pulses, pix_idx].mean()
+        
+        roi_mask_refined = np.zeros((H, W), dtype=bool)
+        roi_mask_refined[roi_mask] = selected_pixels
+        
+        corr_map = np.zeros((H, W), dtype=float)
+        corr_map[roi_mask] = mean_corr_per_pixel
+    else:
+        roi_trace = np.zeros(0)
+        valid_corrs = np.array([])
+        roi_mask_refined = np.zeros((H, W), dtype=bool)
+        corr_map = np.zeros((H, W), dtype=float)
+    
+    return roi_trace, roi_mask_refined, corr_map, valid_corrs, valid_segments
+
+
+
+def get_dff(reps, n_pre, n_width, n_post, n_isi, stack, roi_mask_refined, roi_trace, pulse_protocol, fps):
+    # Extract mean trace and compute dF/F
+    onsets = []
+    idx = 0
+    for r in range(reps):
+        idx = idx + n_pre
+        onsets.append(idx)
+        idx = idx + n_width
+        if r < reps - 1:
+            idx = idx + n_post + n_isi
+        else:
+            idx = idx + n_post
+    onsets = np.array(onsets, dtype=int)
+    roi_pixels = stack[:, roi_mask_refined]
+    n_pixels_original = roi_pixels.shape[1]
+    
+    baseline = np.zeros_like(roi_trace)
+    for onset in onsets:
+        start = max(0, onset - n_pre)
+        base = roi_trace[start:onset].mean()
+        baseline[onset:onset+n_width] = base
+    mask_nan = baseline == 0
+    if np.any(mask_nan):
+        last = roi_trace[:n_pre].mean()
+        for t in range(T):
+            if baseline[t] == 0:
+                baseline[t] = last
+            else:
+                last = baseline[t]
+    dff = (roi_trace - baseline) / (baseline + 1e-6)
+    # df/f averaged across pulses
+    pulse_length = n_pre + n_width + n_post
+    pulses = []
+    for onset in onsets:
+        start = onset - n_pre
+        end = start + pulse_length
+        if end <= len(dff):
+            pulse = dff[start:end]
+            pulses.append(pulse)
+    if pulses:
+        pulses_array = np.array(pulses)
+        pulse_avg = np.mean(pulses_array, axis=0)
+        pulse_std = np.std(pulses_array, axis=0)
+        pulse_sem = np.std(pulses_array, axis=0) / np.sqrt(len(pulses))
+    else:
+        pulse_avg = np.array([])
+        pulse_std = np.array([])
+        pulse_sem = np.array([])
+    dff_pulse = {
+        'pulse_mean': pulse_avg,
+        'pulse_std': pulse_std,
+        'pulse_sem': pulse_sem,
+        'individual_pulses': pulses_array if pulses else None,
+        'pulse_protocol': pulse_protocol,
+        'n_pulses': len(pulses),
+        'fps': fps}
+    return dff, dff_pulse, n_pixels_original, pulses_array, pulses, pulse_avg, pulse_protocol
+
+
+def get_dff_cut_pulse(roi_trace, n_pre, n_width, n_post, stack, roi_mask_refined, valid_segments, pulse_protocol, fps):
+    roi_pixels = stack[:, roi_mask_refined]
+    n_pixels_original = roi_pixels.shape[1]
+    basline = roi_trace[0:n_pre].mean()
+    dff = (roi_trace - basline) / (basline + 1e-6)
+    return dff, n_pixels_original
+    # """
+    # Calculate dF/F using a global baseline from all selected pixels and pulses.
+    # Baseline is calculated from pre-stimulus periods of all valid segments.
+    
+    # Parameters:
+    # -----------
+    # n_pre, n_width, n_post : int
+    #     Frame counts for protocol segments
+    # stack : array
+    #     Full stack (for pixel count calculation)
+    # roi_mask_refined : array (H, W)
+    #     Boolean mask of selected pixels
+    # valid_segments : list or array (n_valid_pulses, pulse_length)
+    #     Individual valid pulse segments from get_corr_pixels_per_pulse
+    # pulse_protocol : array
+    #     Pulse protocol
+    # fps : float
+    #     Frames per second
+    
+    # Returns:
+    # --------
+    # dff : array (pulse_length,)
+    #     Mean dF/F trace across all valid pulses
+    # dff_pulse : dict
+    #     Dictionary containing pulse statistics
+    # n_pixels_original : int
+    #     Number of pixels in refined ROI
+    # pulses_array : array (n_valid_pulses, pulse_length)
+    #     dF/F for each individual pulse
+    # pulses : list
+    #     List of individual dF/F pulses
+    # pulse_avg : array (pulse_length,)
+    #     Mean dF/F pulse
+    # pulse_protocol : array
+    #     Pulse protocol
+    # """
+    # pulse_length = n_pre + n_width + n_post
+    
+    # # Count pixels in refined ROI
+    # roi_pixels = stack[:, roi_mask_refined]
+    # n_pixels_original = roi_pixels.shape[1]
+    
+    # # Convert to array if needed
+    # if isinstance(valid_segments, list):
+    #     valid_segments = np.array(valid_segments)
+    
+    # if len(valid_segments) == 0:
+    #     pulses_array = np.array([])
+    #     pulse_avg = np.zeros(pulse_length)
+    #     pulse_std = np.zeros(pulse_length)
+    #     pulse_sem = np.zeros(pulse_length)
+    #     dff = pulse_avg
+    #     pulses = []
+    # else:
+    #     # Calculate global baseline from all pre-stimulus periods of all valid segments
+    #     all_baselines = []
+    #     for segment in valid_segments:
+    #         baseline = segment[:n_pre].mean()
+    #         all_baselines.append(baseline)
+        
+    #     # Use mean of all baselines as the global baseline
+    #     global_baseline = np.mean(all_baselines)
+        
+    #     # Calculate dF/F for each pulse using the global baseline
+    #     pulses = []
+    #     for segment in valid_segments:
+    #         dff_pulse_single = (segment - global_baseline) / (global_baseline + 1e-6)
+    #         pulses.append(dff_pulse_single)
+        
+    #     pulses_array = np.array(pulses)  # Shape: (n_valid_pulses, pulse_length)
+    #     pulse_avg = pulses_array.mean(axis=0)
+    #     pulse_std = pulses_array.std(axis=0)
+    #     pulse_sem = pulses_array.std(axis=0) / np.sqrt(len(pulses))
+    #     dff = pulse_avg
+    
+    # dff_pulse = {
+    #     'pulse_mean': pulse_avg,
+    #     'pulse_std': pulse_std,
+    #     'pulse_sem': pulse_sem,
+    #     'individual_pulses': pulses_array,
+    #     'pulse_protocol': pulse_protocol[:pulse_length],
+    #     'n_pulses': len(pulses),
+    #     'fps': fps
+    # }
+    
+    # return dff, dff_pulse, n_pixels_original, pulses_array, pulses, pulse_avg, pulse_protocol
+
+def get_dff_responsive_pixels(stack, roi_mask, stim, reps, n_pre, n_width, n_post, n_isi, direction='positive', 
+                               control_mode=None, seed=None):
+    """
+    Calculate dF/F for each pixel first, then select pixels showing responses > 2*std,
+    then calculate correlation to stimulus.
+    
+    Parameters:
+    -----------
+    stack : array (T, H, W)
+        Image stack
+    roi_mask : array (H, W)
+        Boolean ROI mask
+    stim : array (T,)
+        Stimulus protocol
+    reps : int
+        Number of stimulus repetitions
+    n_pre, n_width, n_post, n_isi : int
+        Frame counts for protocol segments
+    direction : str
+        'positive' or 'negative'
+    control_mode : str or None
+        None: Normal analysis
+        'shuffle_before_dff': Phase randomize stack before calculating dF/F (Control 1)
+        'shuffle_after_filter': Phase randomize traces after filtering (Control 2)
+    seed : int, optional
+        Random seed for reproducibility
+    
+    Returns:
+    --------
+    roi_trace : array
+        Mean dF/F trace of selected pixels
+    roi_mask_refined : array (H, W)
+        Boolean mask of selected pixels
+    corr_map : array (H, W)
+        Correlation map
+    dff_pixel_traces : array (T, n_selected_pixels)
+        dF/F traces of individual selected pixels
+    """
+    T, H, W = stack.shape
+    
+    # CONTROL 1: Shuffle traces BEFORE calculating dF/F
+    if control_mode == 'shuffle_before_dff':
+        print(f"  [CONTROL 1] Phase randomizing stack before dF/F calculation (seed={seed})")
+        stack = phase_randomize_stack_vectorized(stack, seed=seed)
+    
+    # Calculate stimulus onsets
+    onsets = []
+    idx = 0
+    for r in range(reps):
+        idx = idx + n_pre
+        onsets.append(idx)
+        idx = idx + n_width
+        if r < reps - 1:
+            idx = idx + n_post + n_isi
+        else:
+            idx = idx + n_post
+    onsets = np.array(onsets, dtype=int)
+    
+    # Extract pixels in ROI
+    roi_pixels = stack[:, roi_mask]  # Shape: (T, n_pixels)
+    n_pixels = roi_pixels.shape[1]
+    
+    # Calculate dF/F for each pixel
+    dff_pixels = np.zeros_like(roi_pixels, dtype=float)
+    
+    for px in range(n_pixels):
+        pixel_trace = roi_pixels[:, px]
+        baseline_px = np.zeros_like(pixel_trace)
+        
+        # Calculate baseline for each stimulus window
+        for onset in onsets:
+            start = max(0, onset - n_pre)
+            base = pixel_trace[start:onset].mean()
+            baseline_px[onset:onset+n_width] = base
+        
+        # Forward/backward fill for continuity
+        mask_nan = baseline_px == 0
+        if np.any(mask_nan):
+            last = pixel_trace[:n_pre].mean()
+            for t in range(T):
+                if baseline_px[t] == 0:
+                    baseline_px[t] = last
+                else:
+                    last = baseline_px[t]
+        
+        # Calculate dF/F
+        dff_pixels[:, px] = (pixel_trace - baseline_px) / (np.abs(baseline_px) + 1e-6)
+    
+    # Calculate response during stimulus windows
+    # Extract dF/F during stimulus presentation (width period)
+    stim_responses = []
+    for onset in onsets:
+        if onset + n_width <= T:
+            stim_window = dff_pixels[onset:onset+n_width, :]
+            stim_responses.append(stim_window.mean(axis=0))  # Mean response per pixel
+    
+    stim_responses = np.array(stim_responses)  # Shape: (n_reps, n_pixels)
+    mean_stim_response = stim_responses.mean(axis=0)  # Mean across repetitions
+    
+    # Calculate baseline response (pre-stimulus periods)
+    baseline_responses = []
+    for onset in onsets:
+        start = max(0, onset - n_pre)
+        baseline_window = dff_pixels[start:onset, :]
+        baseline_responses.append(baseline_window.mean(axis=0))
+    
+    baseline_responses = np.array(baseline_responses)
+    mean_baseline_response = baseline_responses.mean(axis=0)
+    
+    # Calculate response magnitude (stimulus - baseline)
+    response_magnitude = mean_stim_response - mean_baseline_response
+    
+    # # Threshold: 2 * std above/below mean
+    # thr_high = response_magnitude.mean() + 2.0 * response_magnitude.std()
+    # thr_low = response_magnitude.mean() - 2.0 * response_magnitude.std()
+
+    thr_high = mean_baseline_response + 2.0 * baseline_responses.std()
+    thr_low = mean_baseline_response - 2.0 * baseline_responses.std()
+    # Select pixels based on direction
+    if direction == 'positive':
+        selected_pixels = response_magnitude >= thr_high
+    else:  # negative
+        selected_pixels = response_magnitude <= thr_low
+    
+    # Create refined ROI mask
+    roi_mask_refined = np.zeros((H, W), dtype=bool)
+    roi_mask_refined[roi_mask] = selected_pixels
+    
+    # Get dF/F traces of selected pixels
+    dff_selected = dff_pixels[:, selected_pixels]
+    
+    # CONTROL 2: Shuffle traces AFTER filtering for responsive pixels
+    if control_mode == 'shuffle_after_filter':
+        print(f"  [CONTROL 2] Phase randomizing filtered pixel traces (seed={seed})")
+        if dff_selected.shape[1] > 0:
+            dff_selected = phase_randomize_traces(dff_selected, seed=seed)
+    
+    # Calculate mean trace
+    if dff_selected.shape[1] > 0:
+        roi_trace = dff_selected.mean(axis=1)
+    else:
+        roi_trace = np.zeros(T)
+    
+    # NOW calculate correlation with stimulus for selected pixels
+    if dff_selected.shape[1] > 0:
+        # Normalize dF/F traces
+        trace_mat = dff_selected.copy()
+        trace_mat = trace_mat - trace_mat.mean(axis=0, keepdims=True)
+        stdx = trace_mat.std(axis=0, keepdims=True) + 1e-6
+        trace_mat = trace_mat / stdx
+        
+        # Normalize stimulus
+        T2 = trace_mat.shape[0]
+        s = stim[:T2].astype(float)
+        s = s - s.mean()
+        s = s / (s.std() + 1e-6)
+        
+        # Calculate correlation
+        corr = (trace_mat * s[:, None]).mean(axis=0)
+    else:
+        corr = np.array([])
+    
+    # Create correlation map
+    corr_map = np.zeros((H, W), dtype=float)
+    if len(corr) > 0:
+        corr_map[roi_mask_refined] = corr
+    
+    return roi_trace, roi_mask_refined, corr_map, dff_selected
+
+
+def get_dff_and_pulses(roi_trace, dff_pixel_traces, reps, n_pre, n_width, n_post, n_isi, 
+                       pulse_protocol, fps):
+    """
+    Extract pulse-averaged data from already calculated dF/F traces.
+    
+    Parameters:
+    -----------
+    roi_trace : array
+        Mean dF/F trace across selected pixels
+    dff_pixel_traces : array (T, n_pixels)
+        Individual pixel dF/F traces
+    reps : int
+        Number of repetitions
+    n_pre, n_width, n_post, n_isi : int
+        Frame counts for protocol segments
+    pulse_protocol : array
+        Single pulse protocol for plotting
+    fps : float
+        Frame rate
+    
+    Returns:
+    --------
+    dff : array
+        Mean dF/F trace (same as roi_trace input)
+    dff_pulse : dict
+        Dictionary with pulse-averaged data
+    n_pixels_original : int
+        Number of selected pixels
+    pulses_array : array
+        Individual pulses stacked
+    pulses : list
+        List of individual pulses
+    pulse_avg : array
+        Average across pulses
+    pulse_protocol : array
+        Protocol for plotting
+    """
+    T = len(roi_trace)
+    n_pixels_original = dff_pixel_traces.shape[1] if dff_pixel_traces.ndim > 1 else 0
+    
+    # Calculate pulse onsets
+    onsets = []
+    idx = 0
+    for r in range(reps):
+        idx = idx + n_pre
+        onsets.append(idx)
+        idx = idx + n_width
+        if r < reps - 1:
+            idx = idx + n_post + n_isi
+        else:
+            idx = idx + n_post
+    onsets = np.array(onsets, dtype=int)
+    
+    # Extract pulses from mean trace
+    pulse_length = n_pre + n_width + n_post
+    pulses = []
+    for onset in onsets:
+        start = onset - n_pre
+        end = start + pulse_length
+        if end <= len(roi_trace):
+            pulse = roi_trace[start:end]
+            pulses.append(pulse)
+    
+    # Calculate pulse statistics
+    if pulses:
+        pulses_array = np.array(pulses)
+        pulse_avg = np.mean(pulses_array, axis=0)
+        pulse_std = np.std(pulses_array, axis=0)
+        pulse_sem = np.std(pulses_array, axis=0) / np.sqrt(len(pulses))
+    else:
+        pulses_array = np.array([])
+        pulse_avg = np.array([])
+        pulse_std = np.array([])
+        pulse_sem = np.array([])
+    
+    dff_pulse = {
+        'pulse_mean': pulse_avg,
+        'pulse_std': pulse_std,
+        'pulse_sem': pulse_sem,
+        'individual_pulses': pulses_array if pulses else None,
+        'pulse_protocol': pulse_protocol,
+        'n_pulses': len(pulses),
+        'fps': fps
+    }
+    
+    dff = roi_trace  # Return the same trace
+    
+    return dff, dff_pulse, n_pixels_original, pulses_array, pulses, pulse_avg, pulse_protocol
+
+def analyze_roi_dff_first(stack, roi_mask, stim, reps, n_pre, n_width, n_post, n_isi, 
+                          pulse_protocol, fps, direction='positive', control_mode=None, seed=None):
+    """
+    Complete analysis: dF/F first, then response-based selection, then correlation.
+    
+    This is a drop-in replacement that maintains the same output structure as the
+    old get_corr_pixels + get_dff workflow.
+    
+    Parameters:
+    -----------
+    stack : array (T, H, W)
+        Image stack
+    roi_mask : array (H, W)
+        Boolean ROI mask
+    stim : array (T,)
+        Stimulus protocol
+    reps : int
+        Number of repetitions
+    n_pre, n_width, n_post, n_isi : int
+        Frame counts for protocol segments
+    pulse_protocol : array
+        Single pulse protocol for plotting
+    fps : float
+        Frame rate
+    direction : str
+        'positive' or 'negative'
+    control_mode : str or None
+        None: Normal analysis
+        'shuffle_before_dff': Phase randomize stack before calculating dF/F (Control 1)
+        'shuffle_after_filter': Phase randomize traces after filtering (Control 2)
+    seed : int, optional
+        Random seed for reproducibility
+    
+    Returns:
+    --------
+    dict : Contains all analysis outputs with same structure as old functions
+    """
+    # Step 1: Calculate dF/F and select responsive pixels (with optional control)
+    roi_trace, roi_mask_refined, corr_map, dff_pixel_traces = get_dff_responsive_pixels(
+        stack, roi_mask, stim, reps, n_pre, n_width, n_post, n_isi, direction,
+        control_mode=control_mode, seed=seed
+    )
+    
+    # Step 2: Extract pulse-averaged data
+    dff, dff_pulse, n_pixels, pulses_array, pulses, pulse_avg, pulse_protocol_out = get_dff_and_pulses(
+        roi_trace, dff_pixel_traces, reps, n_pre, n_width, n_post, n_isi, 
+        pulse_protocol, fps
+    )
+    
+    return {
+        'roi_trace': roi_trace,
+        'roi_mask_refined': roi_mask_refined,
+        'corr_map': corr_map,
+        'dff': dff,
+        'dff_pulse': dff_pulse,
+        'n_pixels': n_pixels,
+        'pulses_array': pulses_array,
+        'pulses': pulses,
+        'pulse_avg': pulse_avg,
+        'pulse_protocol': pulse_protocol_out,
+        'dff_pixel_traces': dff_pixel_traces,
+        'control_mode': control_mode
+    }
+
+
+def extract_data(results):
+    return results['corr_map'], results['roi_mask_refined'], results['dff'], results['n_pixels'], results['dff_pulse'], results['pulse_avg']
+
+
+def plot_tif_results(direction, rep_frame_o, rep_frame, corr_map, roi_mask_refined, output_tif, dff, stim, title_suffix, n_pixels_original, save_suffix, dff_pulse, only_pulse, ylim=None):
+    fig1 = plt.figure(figsize=(14, 4))
+    plt.suptitle(f'{direction} - ROI Selection', fontsize=16, fontweight='bold')
+    plt.subplot(1, 4, 1)
+    plt.imshow(rep_frame_o, cmap='gray')
+    plt.title('Median frame (for ROI)')
+    plt.subplot(1, 4, 2)
+    plt.imshow(rep_frame, cmap='gray')
+    overlay = np.zeros((*rep_frame.shape, 4))
+    overlay[roi_mask, :] = [0, 1, 1, 0.3]
+    plt.imshow(overlay)
+    plt.title('Selected napari region on median frame')
+    plt.subplot(1, 4, 3)
+    plt.imshow(corr_map, cmap='magma')
+    plt.title('Correlation map inside drawn ROI')
+    plt.colorbar(fraction=0.046, pad=0.04)
+    plt.subplot(1, 4, 4)
+    plt.imshow(roi_mask_refined, cmap='Greens')
+    plt.title('Refined ROI mask (corr-threshold)')
+    plt.tight_layout()
+    fig1.savefig(Path(output_tif) / f'roi_visualization_{direction}{save_suffix}.png', dpi=400)
+    plt.close(fig1)
+    
+    
+    # Save dF/F trace figure
+    if len(dff)>400:
+        fig2 = plt.figure(figsize=(12, 4))
+    else:
+        fig2 = plt.figure(figsize=(6, 6))
+    plt.plot(dff, color='k', linewidth=1.2)
+    plt.plot(stim, color='r')
+    # title_suffix = ' (Phase Randomized)' if stack_type == 'shuffled' else ''
+    plt.title(f'ROI mean trace dF/F with stimulus epochs (n={n_pixels_original} pixels), {direction}{title_suffix}')
+    plt.xlabel('Frame')
+    plt.ylabel('dF/F')
+    if ylim:
+        plt.ylim(ylim[0], ylim[1])
+    plt.tight_layout()
+    fig2.savefig(Path(output_tif) / f'all_pixels_{direction}{save_suffix}.png', dpi=400)
+    plt.close(fig2)
+    if only_pulse == False:
+        pulses_array = dff_pulse['individual_pulses']
+        pulse_avg = dff_pulse['pulse_mean']
+        pulse_protocol = dff_pulse['pulse_protocol']
+        pulse_sem = dff_pulse['pulse_sem']
+        pulses = dff_pulse['n_pulses']
+        # Save pulse average figure
+        fig3 = plt.figure(figsize=(6, 12))
+        plt.subplot(2, 1, 1)
+        if pulses_array is not None:
+            for i, pulse in enumerate(pulses_array):
+                plt.plot(pulse, 'grey', alpha=0.3, linewidth=0.8)
+        plt.plot(pulse_avg, 'k', linewidth=2, label='Average across pulses')
+        plt.plot(pulse_protocol, 'r', linewidth=1.5, label='Stimulus')
+        plt.title(f'Individual pulses and average (n={pulses} pulses), {direction}{title_suffix}')
+        plt.ylabel('dF/F')
+        # if direction == 'positive':
+        #     plt.ylim(-5,10)
+        # else:
+        #     plt.ylim(-10,5)
+        plt.legend()
+        plt.subplot(2, 1, 2)
+        frames_pulse = np.arange(len(pulse_avg))
+        plt.plot(pulse_avg, 'k', linewidth=2, label='Mean')
+        plt.fill_between(frames_pulse, pulse_avg - pulse_sem, pulse_avg + pulse_sem,
+                        alpha=0.3, color='gray', label='SEM')
+        plt.plot(pulse_protocol, 'r', linewidth=1.5, label='Stimulus')
+        plt.title(f'Average pulse with SEM, {direction}{title_suffix}')
+        plt.xlabel('Frame (relative to pulse onset)')
+        plt.ylabel('dF/F')
+        # if direction == 'positive':
+        #     plt.ylim(-5,10)
+        # else:
+        #     plt.ylim(-10,5)
+        plt.legend()
+        plt.tight_layout()
+        fig3.savefig(Path(output_tif) / f'pulse_average_{direction}{save_suffix}.png', dpi=400)
+        plt.close(fig3)
+
+
+
+
+
+
+def plot_fly_avg(fly_average, stim, tif_files, title_suffix, output_fly, save_str, fly_pulse_average, pulse_protocol, only_pulse):
+    # Plot fly-level averages (original and shuffled)
+    for direction in ['positive', 'negative']:
+        
+        dff = fly_average[direction]['dff_mean']
+        dff_sem = fly_average[direction]['dff_sem']
+        # # Phase randomize the averaged trace for shuffled version
+        # if save_str == '_shuffled':
+        #     dff = phase_randomize_trace(dff, seed=hash(fly) % 10000)
+        frames = np.arange(len(dff))
+        if len(dff)>400:
+            fig2, ax = plt.subplots(figsize=(12, 4))
+        else:
+            fig2, ax = plt.subplots(figsize=(6, 6))
+        
+        plt.plot(dff, color='k', linewidth=1.2)
+        plt.plot(stim, color='r')
+        ax.fill_between(frames, dff - dff_sem, dff + dff_sem, alpha=0.3, zorder=4, color='gray')
+        # title_suffix = ' (Phase Randomized)' if save_str == '_shuffled' else ''
+        plt.title(f'mean across {len(tif_files)} recordings, {direction}{title_suffix}')
+        plt.xlabel('Frame')
+        plt.ylabel('dF/F')
+        # if direction == 'positive':
+        #     plt.ylim(-2.5,5)
+        # else:
+        #     plt.ylim(-5,2.5)
+        plt.tight_layout()
+        fig2.savefig(Path(output_fly) / f'all_pixels_{direction}{save_str}.png', dpi=400)
+        plt.close(fig2)
+        if only_pulse == False:
+            # Plot pulse averages
+            pulse_avg = fly_pulse_average[direction]['pulse_mean']
+            pulse_sem = fly_pulse_average[direction]['pulse_sem']
+            # # Phase randomize pulse average for shuffled version
+            # if save_str == '_shuffled':
+            #     pulse_avg = phase_randomize_trace(pulse_avg, seed=hash(fly) % 10000 + 1)
+            
+            frames_pulse = np.arange(len(pulse_avg))
+            fig4 = plt.figure(figsize=(4, 4))
+            plt.plot(pulse_avg, 'k', linewidth=2, label='Mean')
+            plt.fill_between(frames_pulse, pulse_avg - pulse_sem, pulse_avg + pulse_sem,
+                        alpha=0.3, color='gray', label='SEM')
+            plt.plot(pulse_protocol, 'r', linewidth=1.5, label='Stimulus')
+            plt.title(f'Mean pulse across {fly_pulse_average[direction]["n_tseries"]} TSeries, {direction}{title_suffix}')
+            plt.xlabel('Frame (relative to pulse onset)')
+            plt.ylabel('dF/F')
+            # if direction == 'positive':
+            #     plt.ylim(-2.5,5)
+            # else:
+            #     plt.ylim(-5,2.5)
+            plt.legend()
+            plt.tight_layout()
+            fig4.savefig(Path(output_fly) / f'pulse_average_{direction}{save_str}.png', dpi=400)
+            plt.close(fig4)
+
+
+def plot_condition_avg(condition_average, protocoll_new, title_suffix, outpout_condition, save_str, condition_pulse_average, pulse_protocol_new, only_pulse, ylim=None):
+    # Plot condition-level averages (original and shuffled)
+    for direction in ['positive', 'negative']:
+        
+        dff = condition_average[direction]['dff_mean']
+        dff_sem = condition_average[direction]['dff_sem']
+        
+        # # Phase randomize for shuffled version
+        # if save_str == '_shuffled':
+        #     dff = phase_randomize_trace(dff, seed=hash(condition) % 10000)
+        
+        frames = np.arange(len(dff))
+        n_flies = len([d for d in os.listdir(f'{processed_recordings}/{condition}') 
+                        if os.path.isdir(f'{processed_recordings}/{condition}/{d}')])
+        if len(dff)>400:
+            fig2, ax = plt.subplots(figsize=(12, 4))
+        else:
+            fig2, ax = plt.subplots(figsize=(6, 6))
+        # fig2, ax = plt.subplots(figsize=(12, 4))
+        plt.plot(dff, color='k', linewidth=1.2)
+        plt.plot(protocoll_new, color='r')
+        ax.fill_between(frames, dff - dff_sem, dff + dff_sem, alpha=0.3, zorder=4, color='gray')
+        # title_suffix = ' (Phase Randomized)' if save_str == '_shuffled' else ''
+        plt.title(f'mean across {n_flies} flies, {direction}{title_suffix}')
+        plt.xlabel('Frame')
+        # if direction == 'positive':
+        #     plt.ylim(-2.5,5)
+        # else:
+        #     plt.ylim(-5,2.5)
+        if ylim:
+            plt.ylim(ylim[0], ylim[1])
+        plt.ylabel('dF/F')
+        plt.tight_layout()
+        fig2.savefig(Path(outpout_condition) / f'all_pixels_{direction}{save_str}.png', dpi=400)
+        plt.close(fig2)
+        if only_pulse == False:
+            # Plot pulse averages
+            pulse_avg = condition_pulse_average[direction]['pulse_mean']
+            pulse_sem = condition_pulse_average[direction]['pulse_sem']
+            
+            # # Phase randomize pulse for shuffled version
+            # if save_str == '_shuffled':
+            #     pulse_avg = phase_randomize_trace(pulse_avg, seed=hash(condition) % 10000 + 1)
+            
+            frames_pulse = np.arange(len(pulse_avg))
+            fig5 = plt.figure(figsize=(4, 4))
+            plt.plot(pulse_avg, 'k', linewidth=2, label='Mean')
+            plt.fill_between(frames_pulse, pulse_avg - pulse_sem, pulse_avg + pulse_sem,
+                        alpha=0.3, color='gray', label='SEM')
+            plt.plot(pulse_protocol_new, 'r', linewidth=1.5, label='Stimulus')
+            if ylim:
+                plt.ylim(ylim[0], ylim[1])
+            plt.title(f'Mean pulse across {condition_pulse_average[direction]["n_flies"]} flies, {direction}{title_suffix}')
+            plt.xlabel('Frame (relative to pulse onset)')
+            # if direction == 'positive':
+            #     plt.ylim(-2.5,5)
+            # else:
+            #     plt.ylim(-5,2.5)
+            plt.ylabel('dF/F')
+            plt.legend()
+            plt.tight_layout()
+            fig5.savefig(Path(outpout_condition) / f'pulse_average_{direction}{save_str}.png', dpi=400)
+            plt.close(fig5)
+
+
+mean_fps = metadata.loc[:, 'fps'].mean()
+for condition in os.listdir(processed_recordings):
+    if condition.endswith("_nan"):#or condition == '_LOP_ACV' or condition == '_LO_ACV':
+        continue
+    print(f'processing {condition}')
+    condition_results, condition_pulse_results = {}, {}
+    condition_pulse_results_cut_pulse, condition_pulse_results_cut_pulse_shuffled = {}, {}
+    condition_results_shuffled, condition_pulse_results_shuffled = {}, {}
+    condition_results_sortdff, condition_pulse_results_sortdff = {}, {}
+    condition_results_shuffle_before_dff, condition_pulse_results_shuffle_before_dff = {}, {}
+    condition_results_shuffle_after_filter, condition_pulse_results_shuffle_after_filter = {}, {}
+    region = condition.split('_')[1]
+    outpout_condition = f'{processed_recordings}/{condition}'
+    if os.path.isdir(f'{processed_recordings}/{condition}'):
+        for fly in os.listdir(f'{processed_recordings}/{condition}'):
+            if os.path.isdir(f'{processed_recordings}/{condition}/{fly}'):
+                fly_result,fly_pulse_result = {}, {}
+                fly_result_sortdff, fly_pulse_result_sortdff = {}, {}
+                fly_result_shuffle_before_dff, fly_pulse_result_shuffle_before_dff = {}, {}
+                fly_result_shuffle_after_filter, fly_pulse_result_shuffle_after_filter = {}, {}
+                fly_result_shuffled, fly_pulse_result_shuffled = {}, {}
+                fly_pulse_result_cut_pulse, fly_pulse_result_cut_pulse_shuffled = {}, {}
+                meta_fly = metadata[metadata['fly']==fly]
+                meta_fly_region = meta_fly[meta_fly['region']==region]
+                fps = meta_fly_region['fps'].values[0]
+                reps = 5
+                n_pre = int(5 * fps)
+                n_width = int(5 * fps)
+                n_post = int(5 * fps)
+                n_isi = int(20 * fps)
+                protocol, pulse_protocol = make_olf_protocoll(fps)
+                print(fly)
+                output_fly = f'{processed_recordings}/{condition}/{fly}'
+                # Get all TIF files in folder
+                tif_files = sorted(Path(output_fly).rglob("*_motCorr.tif"))
+                print(f"Found {len(tif_files)} TIF files")
+                # Storage for collecting data across TIFs
+                # Loop through each TIF file
+                pixel_maks = {}
+                for tif_idx, stack_path in enumerate(tif_files):
+                    tif_result, tif_pulse_result = {}, {}
+                    tif_pulse_result_cut_pulse, tif_pulse_result_cut_pulse_shuffled = {}, {}
+                    tif_result_sortdff, tif_pulse_result_sortdff = {}, {}
+                    tif_result_shuffle_before_dff, tif_pulse_result_shuffle_before_dff = {}, {}
+                    tif_result_shuffle_after_filter, tif_pulse_result_shuffle_after_filter = {}, {}
+                    tif_result_shuffled, tif_pulse_result_shuffled = {}, {}
+                    print(str(stack_path))
+                    tif_name = str(stack_path).split('\\')[-2]
+                    output_tif = f'{processed_recordings}/{condition}/{fly}/{tif_name}'
+                    print(f"\nProcessing {tif_idx+1}/{len(tif_files)}: {stack_path.name}")
+                    # --- Load stack ---
+                    stack = tiff.imread(str(stack_path)).astype(np.float32)
+                    T, H, W = stack.shape
+                    rep_frame_o = np.median(stack, axis=0) 
+                    # # Frame-wise mean subtraction
+                    subtracted = np.zeros_like(stack, dtype=float)
+                    for frame_idx in range(stack.shape[0]):
+                        frame_mean = stack[frame_idx].mean()
+                        subtracted[frame_idx] = stack[frame_idx] - frame_mean
+
+
+                    #BG substraction, substract mean of darkest 20 pixels from each pixel and frame
+                    # Find mean of darkest 20 pixels in the median image
+                    # darkest_20_indices = np.argpartition(rep_frame_o.flatten(), 20)[:20]
+                    # darkest_20_values = rep_frame_o.flatten()[darkest_20_indices]
+                    # dark_mean = darkest_20_values.mean()
+                    # subtracted = stack - dark_mean
+
+                    # substract temporal mean of each pixel per pixel and frame
+                    # Calculate mean for each pixel across all frames
+                    temporal_mean = subtracted.mean(axis=0)
+                    # Subtract the temporal mean frame from each frame
+                    subtracted = subtracted - temporal_mean 
+
+                    stack = subtracted
+                    stack_shuffled = phase_randomize_stack_vectorized(stack, seed=tif_idx + 42)
+                    rep_frame = np.median(stack, axis=0)        
+                    # Trim or pad protocol to T
+                    if protocol.shape[0] < T:
+                        pad = np.zeros(T - protocol.shape[0], dtype=np.float32)
+                        stim = np.hstack((protocol, pad))
+                    elif protocol.shape[0] > T:
+                        stim = protocol[:T]
+                    else:
+                        stim = protocol.copy()
+                    # --- Napari selection (only for first file) ---
+                    if tif_idx == 0:
+                        viewer = napari.Viewer()
+                        image_layer = viewer.add_image(rep_frame_o, name='median')
+                        shapes = viewer.add_shapes(name='ROI', edge_color='cyan', face_color='cyan', opacity=0.2)
+                        shapes.mode = 'add_polygon'
+                        napari.run()
+                        
+                        # Convert shapes to mask (union of all drawn shapes)
+                        roi_mask = np.zeros((H, W), dtype=bool)
+                        for data, shape_type in zip(shapes.data, shapes.shape_type):
+                            canvas = np.zeros((H, W), dtype=np.uint8)
+                            if shape_type in ['polygon', 'path']:
+                                rr, cc = polygon(data[:, 0], data[:, 1], shape=(H, W))
+                                canvas[rr, cc] = 1
+                            elif shape_type in ['rectangle', 'ellipse']:
+                                y0 = int(np.min(data[:, 0]))
+                                y1 = int(np.max(data[:, 0]))
+                                x0 = int(np.min(data[:, 1]))
+                                x1 = int(np.max(data[:, 1]))
+                                canvas[y0:y1+1, x0:x1+1] = 1
+                            roi_mask = np.logical_or(roi_mask, canvas.astype(bool))
+                    # --- Correlation within ROI ---
+                    # --- Process both original and shuffled stacks ---
+                    for direction in ['positive', 'negative']:
+                        substack = stack[:, roi_mask]
+
+                        #TODO: more controls, have very high df f values> filter non fluorescent pixel traces
+                        # results_real = analyze_roi_dff_first(stack, roi_mask, stim, reps, n_pre, n_width, n_post, n_isi,pulse_protocol, fps, direction=direction, control_mode=None)
+                        # corr_map, roi_mask_refined, dff, n_pixels_original, dff_pulse, pulse_avg = extract_data(results_real)
+                        # plot_tif_results(direction, rep_frame_o, rep_frame, corr_map, roi_mask_refined, output_tif, dff, stim, '', n_pixels_original, '_sortdff', dff_pulse)
+                        # tif_result_sortdff[direction] = {"dff": dff, 'fps': fps}
+                        # tif_pulse_result_sortdff[direction] = {'fps': fps, 'pulse_mean': pulse_avg}
+                        # # Control 1
+                        # results_ctrl1 = analyze_roi_dff_first(stack, roi_mask, stim, reps, n_pre, n_width, n_post, n_isi,pulse_protocol, fps, direction=direction, control_mode='shuffle_before_dff', seed=42)
+                        # corr_map, roi_mask_refined, dff, n_pixels_original, dff_pulse, pulse_avg = extract_data(results_ctrl1)
+                        # plot_tif_results(direction, rep_frame_o, rep_frame, corr_map, roi_mask_refined, output_tif, dff, stim, '(Phase Randomized)', n_pixels_original, '_shuffle_before_dff', dff_pulse)
+                        # tif_result_shuffle_before_dff[direction] = {"dff": dff, 'fps': fps}
+                        # tif_pulse_result_shuffle_before_dff[direction] = {'fps': fps, 'pulse_mean': pulse_avg}
+                        # # Control 2
+                        # results_ctrl2 = analyze_roi_dff_first(stack, roi_mask, stim, reps, n_pre, n_width, n_post, n_isi,pulse_protocol, fps, direction=direction, control_mode='shuffle_after_filter', seed=42)
+                        # corr_map, roi_mask_refined, dff, n_pixels_original, dff_pulse, pulse_avg = extract_data(results_ctrl2)
+                        # plot_tif_results(direction, rep_frame_o, rep_frame, corr_map, roi_mask_refined, output_tif, dff, stim, '(Phase Randomized)', n_pixels_original, '_shuffle_after_filter', dff_pulse)
+                        # tif_result_shuffle_after_filter[direction] = {"dff": dff, 'fps': fps}
+                        # tif_pulse_result_shuffle_after_filter[direction] = {'fps': fps, 'pulse_mean': pulse_avg}
+
+                        roi_trace, roi_mask_refined, corr_map, valid_corrs, valid_segments = get_corr_pixels_per_pulse(substack, pulse_protocol, roi_mask, reps, n_pre, n_width, n_post, n_isi, direction)
+                        # dff, dff_pulse, n_pixels_original, pulses_array, pulses, pulse_avg, pulse_protocol = get_dff_cut_pulse(n_pre, n_width, n_post,stack, roi_mask_refined, valid_segments, pulse_protocol, fps)
+                        dff, n_pixels_original = get_dff_cut_pulse(roi_trace, n_pre, n_width, n_post,stack, roi_mask_refined, valid_segments, pulse_protocol, fps)
+                        plot_tif_results(direction, rep_frame_o, rep_frame, corr_map, roi_mask_refined, output_tif, dff, pulse_protocol, '', n_pixels_original, '_cut_pulse', [], True, [-5, 30])
+                        tif_pulse_result_cut_pulse[direction] = {"dff": dff, 'fps': fps}
+                        substack_shuff = stack_shuffled[:, roi_mask]
+                        roi_trace, roi_mask_refined, corr_map, valid_corrs, valid_segments = get_corr_pixels_per_pulse(substack_shuff, pulse_protocol, roi_mask, reps, n_pre, n_width, n_post, n_isi, direction)
+                        # dff, dff_pulse, n_pixels_original, pulses_array, pulses, pulse_avg, pulse_protocol = get_dff_cut_pulse(n_pre, n_width, n_post,stack, roi_mask_refined, valid_segments, pulse_protocol, fps)
+                        dff, n_pixels_original = get_dff_cut_pulse(roi_trace, n_pre, n_width, n_post,stack, roi_mask_refined, valid_segments, pulse_protocol, fps)
+                        plot_tif_results(direction, rep_frame_o, rep_frame, corr_map, roi_mask_refined, output_tif, dff, pulse_protocol, '(Phase Randomized)', n_pixels_original, '_cut_pulse_shuffled', [], True, [-5, 30])
+                        tif_pulse_result_cut_pulse_shuffled[direction] = {"dff": dff, 'fps': fps}
+
+                        roi_trace, roi_mask_refined, corr_map = get_corr_pixels(substack, stim, roi_mask)
+                        dff, dff_pulse, n_pixels_original, pulses_array, pulses, pulse_avg, pulse_protocol = get_dff(reps, n_pre, n_width, n_post, n_isi, stack, roi_mask_refined, roi_trace, pulse_protocol, fps)
+                        plot_tif_results(direction, rep_frame_o, rep_frame, corr_map, roi_mask_refined, output_tif, dff, stim, '', n_pixels_original, '', dff_pulse, False)
+                        # --- Save figures (only for original stack to avoid duplication in first plot) ---
+                        tif_result[direction] = {"dff": dff, 'fps': fps}
+                        tif_pulse_result[direction] = {'fps': fps, 'pulse_mean': pulse_avg}
+
+
+                        substack_shuff = stack_shuffled[:, roi_mask]
+                        roi_trace, roi_mask_refined, corr_map = get_corr_pixels(substack_shuff, stim, roi_mask)
+                        dff, dff_pulse, n_pixels_original, pulses_array, pulses, pulse_avg, pulse_protocol = get_dff(reps, n_pre, n_width, n_post, n_isi, stack, roi_mask_refined, roi_trace, pulse_protocol, fps)
+                        plot_tif_results(direction, rep_frame_o, rep_frame, corr_map, roi_mask_refined, output_tif, dff, stim, '(Phase Randomized)', n_pixels_original, '_shuffled', dff_pulse, False)
+                        
+                        tif_result_shuffled[direction] = {"dff": dff, 'fps': fps}
+                        tif_pulse_result_shuffled[direction] = {'fps': fps, 'pulse_mean': pulse_avg}
+                    
+                    fly_result[tif_name] = tif_result
+                    fly_pulse_result[tif_name] = tif_pulse_result
+                    fly_result_shuffled[tif_name] = tif_result_shuffled
+                    fly_pulse_result_shuffled[tif_name] = tif_pulse_result_shuffled
+
+                    fly_pulse_result_cut_pulse[tif_name] = tif_pulse_result_cut_pulse
+                    fly_pulse_result_cut_pulse_shuffled[tif_name] = tif_pulse_result_cut_pulse_shuffled
+
+                    # fly_result_sortdff[tif_name] = tif_result_sortdff
+                    # fly_pulse_result_sortdff[tif_name] = tif_pulse_result_sortdff
+
+                    # fly_result_shuffle_before_dff[tif_name] = tif_result_shuffle_before_dff
+                    # fly_pulse_result_shuffle_before_dff[tif_name] = tif_pulse_result_shuffle_before_dff
+
+                    # fly_result_shuffle_after_filter[tif_name] = tif_result_shuffle_after_filter
+                    # fly_pulse_result_shuffle_after_filter[tif_name] = tif_pulse_result_shuffle_after_filter
+
+                fly_pulse_average_cut_pulse = average_across_tseries(fly_pulse_result_cut_pulse)
+                plot_fly_avg(fly_pulse_average_cut_pulse, pulse_protocol, tif_files, '', output_fly, '_cut_pulse', [], pulse_protocol, True)
+                fly_pulse_average_cut_pulse = interpolate_to_mean_fps(fly_pulse_average_cut_pulse, mean_fps)
+                condition_pulse_results_cut_pulse[fly] = fly_pulse_average_cut_pulse
+
+                fly_pulse_average_cut_pulse_shuffled = average_across_tseries(fly_pulse_result_cut_pulse_shuffled)
+                plot_fly_avg(fly_pulse_average_cut_pulse_shuffled, pulse_protocol, tif_files, '(Phase Randomized)', output_fly, '_cut_pulse_shuffled', [], pulse_protocol, True)
+                fly_pulse_average_cut_pulse_shuffled = interpolate_to_mean_fps(fly_pulse_average_cut_pulse_shuffled, mean_fps)
+                condition_pulse_results_cut_pulse_shuffled[fly] = fly_pulse_average_cut_pulse_shuffled
+
+                # fly_average_sortdff = average_across_tseries(fly_result_sortdff)
+                # fly_pulse_average_sortdff = average_across_tseries(fly_pulse_result_sortdff)
+                # plot_fly_avg(fly_average_sortdff, stim, tif_files, '', output_fly, '_sortdff', fly_pulse_average_sortdff, pulse_protocol,False)
+                # fly_average_sortdff = interpolate_to_mean_fps(fly_average_sortdff, mean_fps)
+                # condition_results_sortdff[fly] = fly_average_sortdff
+                # fly_pulse_average_sortdff = interpolate_to_mean_fps(fly_pulse_average_sortdff, mean_fps)
+                # condition_pulse_results_sortdff[fly] = fly_pulse_average_sortdff
+
+                # fly_average_shuffle_before_dff = average_across_tseries(fly_result_shuffle_before_dff)
+                # fly_pulse_average_shuffle_before_dff = average_across_tseries(fly_pulse_result_shuffle_before_dff)
+                # plot_fly_avg(fly_average_shuffle_before_dff, stim, tif_files, '(Phase Randomized)', output_fly, '_shuffle_before_dff', fly_pulse_average_shuffle_before_dff, pulse_protocol, False)
+                # fly_average_shuffle_before_dff = interpolate_to_mean_fps(fly_average_shuffle_before_dff, mean_fps)
+                # condition_results_shuffle_before_dff[fly] = fly_average_shuffle_before_dff
+                # fly_pulse_average_shuffle_before_dff = interpolate_to_mean_fps(fly_pulse_average_shuffle_before_dff, mean_fps)
+                # condition_pulse_results_shuffle_before_dff[fly] = fly_pulse_average_shuffle_before_dff
+
+                # fly_average_shuffle_after_filter = average_across_tseries(fly_result_shuffle_after_filter)
+                # fly_pulse_average_shuffle_after_filter = average_across_tseries(fly_pulse_result_shuffle_after_filter)
+                # plot_fly_avg(fly_average_shuffle_after_filter, stim, tif_files, '(Phase Randomized)', output_fly, '_shuffle_after_filter', fly_pulse_average_shuffle_after_filter, pulse_protocol, False)
+                # fly_average_shuffle_after_filter = interpolate_to_mean_fps(fly_average_shuffle_after_filter, mean_fps)
+                # condition_results_shuffle_after_filter[fly] = fly_average_shuffle_after_filter
+                # fly_pulse_average_shuffle_after_filter = interpolate_to_mean_fps(fly_pulse_average_shuffle_after_filter, mean_fps)
+                # condition_pulse_results_shuffle_after_filter[fly] = fly_pulse_average_shuffle_after_filter
+
+                # Average across TSeries for original data
+                fly_average = average_across_tseries(fly_result)
+                fly_pulse_average = average_across_tseries(fly_pulse_result)
+                plot_fly_avg(fly_average, stim, tif_files, '', output_fly, '', fly_pulse_average, pulse_protocol, False)
+                fly_average = interpolate_to_mean_fps(fly_average, mean_fps)
+                condition_results[fly] = fly_average
+                fly_pulse_average = interpolate_to_mean_fps(fly_pulse_average, mean_fps)
+                condition_pulse_results[fly] = fly_pulse_average
+
+                fly_average_shuffled = average_across_tseries(fly_result_shuffled)
+                fly_pulse_average_shuffled = average_across_tseries(fly_pulse_result_shuffled)
+                plot_fly_avg(fly_average_shuffled, stim, tif_files, '(Phase Randomized)', output_fly, '_shuffled', fly_pulse_average_shuffled, pulse_protocol, False)
+                fly_average_shuffled = interpolate_to_mean_fps(fly_average_shuffled, mean_fps)
+                condition_results_shuffled[fly] = fly_average_shuffled
+                fly_pulse_average_shuffled = interpolate_to_mean_fps(fly_pulse_average_shuffled, mean_fps)
+                condition_pulse_results_shuffled[fly] = fly_pulse_average_shuffled
+                
+    else:
+        continue
+    protocoll_new, pulse_protocol_new = make_olf_protocoll(mean_fps)
+    # Condition-level averaging
+
+    # condition_average = average_across_flies(condition_results_sortdff)
+    # condition_pulse_average = average_across_flies(condition_pulse_results_sortdff)
+    # plot_condition_avg(condition_average, protocoll_new, '', outpout_condition, '_sortdff', condition_pulse_average, pulse_protocol_new, False)
+
+    # condition_average = average_across_flies(condition_results_shuffle_before_dff)
+    # condition_pulse_average = average_across_flies(condition_pulse_results_shuffle_before_dff)
+    # plot_condition_avg(condition_average, protocoll_new, '(Phase Randomized)', outpout_condition, '_shuffle_before_dff', condition_pulse_average, pulse_protocol_new, False)
+
+    # condition_average = average_across_flies(condition_results_shuffle_after_filter)
+    # condition_pulse_average = average_across_flies(condition_pulse_results_shuffle_after_filter)
+    # plot_condition_avg(condition_average, protocoll_new, '(Phase Randomized)', outpout_condition, '_shuffle_after_filter', condition_pulse_average, pulse_protocol_new, False)
+
+
+
+    condition_pulse_average_cut_pulse = average_across_flies(condition_pulse_results_cut_pulse)
+    plot_condition_avg(condition_pulse_average_cut_pulse, pulse_protocol_new, '', outpout_condition, '_cut_pulse', [], pulse_protocol_new, True, [-1,8])
+
+    condition_pulse_average_cut_pulse_shuffled = average_across_flies(condition_pulse_results_cut_pulse_shuffled)
+    plot_condition_avg(condition_pulse_average_cut_pulse_shuffled, pulse_protocol_new, '(Phase Randomized)', outpout_condition, '_cut_pulse_shuffled', [], pulse_protocol_new, True, [-1,8])
+
+
+
+
+    condition_average = average_across_flies(condition_results)
+    condition_pulse_average = average_across_flies(condition_pulse_results)
+    plot_condition_avg(condition_average, protocoll_new, '', outpout_condition, '', condition_pulse_average, pulse_protocol_new, False, [-1,3])
+
+    condition_average_shuffled = average_across_flies(condition_results_shuffled)
+    condition_pulse_average_shuffled = average_across_flies(condition_pulse_results_shuffled)
+    plot_condition_avg(condition_average_shuffled, protocoll_new, '(Phase Randomized)', outpout_condition, '_shuffled', condition_pulse_average_shuffled, pulse_protocol_new, False, [-1,3])
+    
+    
+    
+
+    #if pulse_corrs.shape[1] > 0:  # Wenn Pixel gefunden wurden
+    # fig_pulse = plt.figure(figsize=(14, 10))
+    
+    # # Plot 1: Correlation map
+    # ax1 = plt.subplot(2, 2, 1)
+    # im = ax1.imshow(corr_map, cmap='magma')
+    # ax1.set_title(f'{direction}: Max Correlation Map\\n({pulse_corrs.shape[1]} pixels)')
+    # ax1.axis('off')
+    # plt.colorbar(im, ax=ax1, fraction=0.046)
+    
+    # # Plot 2: Heatmap - only significant correlations
+    # ax2 = plt.subplot(2, 2, 2)
+    # pulse_corrs_masked = pulse_corrs.copy()
+    # pulse_corrs_masked[~sig_pulses] = np.nan  # Mask non-significant
+    # im = ax2.imshow(pulse_corrs_masked.T, aspect='auto', cmap='RdBu_r', 
+    #                 vmin=-1, vmax=1, interpolation='nearest')
+    # ax2.set_xlabel('Pulse Number')
+    # ax2.set_ylabel('Pixel Index')
+    # ax2.set_title(f'Significant Correlations Only\\n(gray = not significant)')
+    # ax2.set_xticks(np.arange(reps))
+    # ax2.set_xticklabels(np.arange(1, reps+1))
+    # plt.colorbar(im, ax=ax2, label='Correlation')
+    
+    # # Plot 3: Histogram of responsive pulses per pixel
+    # ax3 = plt.subplot(2, 2, 3)
+    # n_responsive_pulses = sig_pulses.sum(axis=0)
+    # ax3.hist(n_responsive_pulses, bins=np.arange(0.5, reps+1.5), 
+    #         edgecolor='black', alpha=0.7, color='steelblue')
+    # ax3.set_xlabel('Number of Responsive Pulses')
+    # ax3.set_ylabel('Number of Pixels')
+    # ax3.set_title('Response Consistency Distribution')
+    # ax3.set_xticks(np.arange(1, reps+1))
+    # ax3.grid(alpha=0.3, axis='y')
+    
+    # # Plot 4: Mean correlation per pulse (only significant)
+    # ax4 = plt.subplot(2, 2, 4)
+    # pulse_ids = np.arange(1, reps+1)
+    # mean_per_pulse = []
+    # std_per_pulse = []
+    # for rep_idx in range(reps):
+    #     sig_corrs = pulse_corrs[rep_idx, sig_pulses[rep_idx, :]]
+    #     if len(sig_corrs) > 0:
+    #         mean_per_pulse.append(sig_corrs.mean())
+    #         std_per_pulse.append(sig_corrs.std())
+    #     else:
+    #         mean_per_pulse.append(0)
+    #         std_per_pulse.append(0)
+    
+    # ax4.errorbar(pulse_ids, mean_per_pulse, yerr=std_per_pulse,
+    #             marker='o', linewidth=2, capsize=5, color='k', markersize=8)
+    # ax4.axhline(0, color='gray', linestyle='--', alpha=0.5)
+    # ax4.set_xlabel('Pulse Number')
+    # ax4.set_ylabel('Mean Correlation (significant only)')
+    # ax4.set_title('Significant Correlation per Pulse')
+    # ax4.grid(alpha=0.3)
+    # ax4.set_xticks(pulse_ids)
+    
+    # plt.tight_layout()
+    # fig_pulse.savefig(Path(output_tif) / f'pulse_correlation_{direction}.png', dpi=400)
+    # plt.close(fig_pulse)

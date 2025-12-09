@@ -9,10 +9,7 @@ Created on Sun Oct  7 00:38:51 2018
 
 from __future__ import division
 from enum import unique
-try:
-    from tkFileDialog import askdirectory, askopenfilename # For Python 2.X
-except:
-    from tkinter.filedialog import askdirectory, askopenfilename # For Python 3.X
+from tkinter.filedialog import askdirectory, askopenfilename # For Python 3.X
 
 from itertools import islice
 from scipy.stats import pearsonr
@@ -355,7 +352,8 @@ def readStimInformation(stimType, original_stimDir):
                     
             if key.startswith("Stimulus."):
                 key = key[9:]
-                    
+                if key.startswith('bar.'):
+                    key=key[4:]
                 if key.startswith("stimtype"):
                     stimInputData[key] = list(map(str, curr_list))
                 else: 

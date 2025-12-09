@@ -10,6 +10,8 @@ df_meta = pd.read_excel(metadata_path, sheet_name=paths.name)
 tseries_list = df_meta['TSeries'].tolist()
 with open(f'{paths.processed}/processing_progress.pkl', 'rb') as fi:
     processing_progress = pickle.load(fi)
+name = os.path.basename(__file__)
+open(error_log, 'a', encoding="utf8").write(f'\nscript used: {name}\n')
 ###############################
 if len(preprocessing_params.experiment)>0:
     target = f'{paths.data}/{preprocessing_params.experiment}'
@@ -20,6 +22,8 @@ if len(preprocessing_params.condition_columns)!= len(set(preprocessing_params.co
     open(error_log, 'a', encoding="utf8").write('\n')
 else:
     for tseries_con in os.listdir(paths.processed):
+        if tseries_con.endswith('_h') or tseries_con.endswith('_v'):
+            continue
         if tseries_con.endswith('.pkl'):
             continue
         for fly in os.listdir(f'{paths.processed}/{tseries_con}'):
@@ -29,12 +33,15 @@ else:
             for tseries in os.listdir(f'{paths.processed}/{tseries_con}/{fly}'):
                 if tseries.startswith("TSeries"):
                     number=tseries.split('-')[-1]
-                    if f'Tseries-{number}' not in tseries_list:
+                    number = number[-1] if number [-2] == "0" else number[-2:]
+                    # if f'Tseries-{number}' not in tseries_list:
+                    if int(number) not in tseries_list:
                         open(error_log, 'a', encoding="utf8").write(f'{fly}/{tseries} : no metadata found')
                         open(error_log, 'a', encoding="utf8").write('\n')
                         continue
                     else:
-                        df_meta_one = df_meta_fly[df_meta_fly['TSeries']==f'Tseries-{number}']
+                        # df_meta_one = df_meta_fly[df_meta_fly['TSeries']==f'Tseries-{number}']
+                        df_meta_one = df_meta_fly[df_meta_fly['TSeries']==int(number)]
                         # tseries_con = core_pre.get_condition_tseries(df_meta_one, preprocessing_params.condition_columns)
                         if os.path.exists(f'{target}{tseries_con}.pkl') == False:
                             with open(f"{target}{tseries_con}.pkl", 'wb') as fo:
@@ -45,6 +52,8 @@ else:
                             if tseries not in condition_pkl.keys():
                                 processing_progress[tseries_con][fly][tseries] = [True,True,True,False]
     for tseries_con in os.listdir(paths.processed):
+        if tseries_con.endswith('_h') or tseries_con.endswith('_v'):
+            continue
         if tseries_con.endswith('.pkl'):
             continue
         for fly in os.listdir(f'{paths.processed}/{tseries_con}'):
@@ -54,7 +63,9 @@ else:
             for tseries in os.listdir(f'{paths.processed}/{tseries_con}/{fly}'):
                 if tseries.startswith('TSeries'):
                     number=tseries.split('-')[-1]
-                    if f'Tseries-{number}' not in tseries_list:
+                    number = number[-1] if number [-2] == "0" else number[-2:]
+                    # if f'Tseries-{number}' not in tseries_list:
+                    if int(number) not in tseries_list:
                         open(error_log, 'a', encoding="utf8").write(f'{fly}/{tseries} : no metadata found')
                         open(error_log, 'a', encoding="utf8").write('\n')
                         continue
@@ -63,7 +74,8 @@ else:
                             processed_files = f'{paths.processed}/{tseries_con}/{fly}/{tseries}/{preprocessing_params.experiment}'
                         else:
                             processed_files = f'{paths.processed}/{tseries_con}/{fly}/{tseries}/'
-                        df_meta_one = df_meta_fly[df_meta_fly['TSeries']==f'Tseries-{number}']
+                        # df_meta_one = df_meta_fly[df_meta_fly['TSeries']==f'Tseries-{number}']
+                        df_meta_one = df_meta_fly[df_meta_fly['TSeries']==int(number)]
                         tseries_con = core_pre.get_condition_tseries(df_meta_one, preprocessing_params.condition_columns)
                         with open(f'{target}{tseries_con}.pkl', 'rb') as fi:
                             condition_pkl = pickle.load(fi)

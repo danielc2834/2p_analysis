@@ -8,7 +8,13 @@ dataset_folder, error_log, metadata_path = my_input[1], my_input[2], my_input[3]
 ################################
 paths = core_pre.dataset(dataset_folder)
 df_meta = pd.read_excel(metadata_path, sheet_name=paths.name) 
+name = os.path.basename(__file__)
+open(error_log, 'a', encoding="utf8").write(f'\nscript used: {name}\n')
 for fly in os.listdir(paths.sort):
+    meta_fly = df_meta[df_meta["fly"]==fly]
+    if "olf_stim_type" in list(meta_fly.columns):
+        if all(pd.isna(x) for x in list(meta_fly.visual_stim)):
+            continue
     if fly.endswith(".pkl") or fly == 'stim':
         continue  
     ctime = {}
@@ -17,7 +23,6 @@ for fly in os.listdir(paths.sort):
         ctime[stimfile] = time
     ctime = dict(sorted(ctime.items()))
     ctime_tseries = {}
-    meta_fly = df_meta[df_meta["fly"]==fly]
     for tseries in os.listdir(f'{paths.sort}/{fly}'):
         if tseries.startswith("TSeries"):
             if os.path.exists(f'{paths.sort}/{fly}/{tseries}/{tseries}_stim_output.txt')==True and  os.path.exists(f'{paths.sort}/{fly}/{tseries}/{tseries}_meta_data.txt')==True:
@@ -27,6 +32,7 @@ for fly in os.listdir(paths.sort):
                 open(error_log, 'a', encoding="utf8").write('\n')
                 continue
             number=tseries.split('-')[-1]
+            number = number[-1] if number [-2] == "0" else number[-2:]
             # if 'olf_stim_type' in list(meta_fly[meta_fly.TSeries==f'Tseries-{number}'].columns):
             #     olf_stim = meta_fly[meta_fly.TSeries==f'Tseries-{number}'].olf_stim_type.values[0]
             #     if olf_stim not in preprocessing_params.olfactory_stimuli.keys():
@@ -47,7 +53,8 @@ for fly in os.listdir(paths.sort):
             #         rois_pkl[olf_stim] = olf_stim_array
             #         with open(f'{target}_ROIS.pkl', 'wb') as fo:
             #             pickle.dump(rois_pkl, fo)
-            visual_stim = meta_fly[meta_fly.TSeries==f'Tseries-{number}'].visual_stim.values[0]
+            # visual_stim = meta_fly[meta_fly.TSeries==f'Tseries-{number}'].visual_stim.values[0]
+            visual_stim = meta_fly[meta_fly.TSeries==int(number)].visual_stim.values[0]
             if isinstance(visual_stim, str) == False:
                 if math.isnan(visual_stim) == True:
                     continue

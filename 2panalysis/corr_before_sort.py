@@ -5,6 +5,7 @@ import napari, os
 from pathlib import Path
 from skimage.draw import polygon
 import pandas as pd
+from scipy import signal
 """
 Phase Randomization testet die Null-Hypothese:
 
@@ -297,9 +298,7 @@ def make_olf_protocoll(fps):
     pulse_protocol = np.concatenate([np.zeros(n_pre),np.ones(n_width),np.zeros(n_post)])
     return protocol, pulse_protocol
 
-def get_corr_pixels(substack, stim, roi_mask):
-    #TODO: cross correlation ( not just at pusl eonset frame)
-    #TODO implemetnt in all controls and in pulse correlation
+def get_corr_pixels(substack, stim, roi_mask,stack, *, direction = "positive"):
     T2 = substack.shape[0]
     trace_mat = substack
     trace_mat = trace_mat - trace_mat.mean(axis=0, keepdims=True)
@@ -321,6 +320,432 @@ def get_corr_pixels(substack, stim, roi_mask):
     roi_trace = stack[:, roi_mask_refined].mean(axis=1)
     return roi_trace, roi_mask_refined, corr_map
 
+
+def get_xcorr_pixels(substack, stack, stim, roi_mask, *, direction="positive", max_lag=None):
+    """
+    Compute cross-correlation between pixel traces and stimulus (finds optimal lag)
+    
+    Args:
+        substack: 3D array (time, height, width) - ROI time series
+        stim: 1D array - stimulus trace
+        roi_mask: 2D bool array (height, width) - pixels to analyze
+        direction: 'positive' or 'negative' - select positively/negatively correlated pixels
+        max_lag: int or None - maximum lag to consider (None = use full range)
+    
+    Returns:
+        roi_trace: 1D array - mean trace of refined ROI
+        roi_mask_refined: 2D bool array - pixels passing threshold
+        xcorr_map: 2D array (height, width) - maximum cross-correlation map
+        lag_map: 2D array (height, width) - lag at maximum correlation (in frames)
+    """
+    T2 = substack.shape[0]
+    H, W = roi_mask.shape
+    
+    # Get masked pixels
+    n_pixels = roi_mask.sum()
+    # masked_traces = substack[:, roi_mask]  # (time, n_pixels)
+    
+    # Normalize traces
+    trace_mat = substack - substack.mean(axis=0, keepdims=True)
+    stdx = trace_mat.std(axis=0, keepdims=True) + 1e-6
+    trace_mat = trace_mat / stdx
+    
+    # Normalize stimulus
+    s = stim[:T2].astype(float)
+    s = s - s.mean()
+    s = s / (s.std() + 1e-6)
+    
+    # Compute cross-correlation for each pixel
+    max_corr = np.zeros(n_pixels)
+    best_lag = np.zeros(n_pixels, dtype=int)
+    
+    for i in range(n_pixels):
+        # Compute cross-correlation
+        xcorr = signal.correlate(trace_mat[:, i], s, mode='same')
+        xcorr = xcorr / T2  # Normalize by length to match correlation scale
+        
+        # Define lag range
+        # lags = np.arange(-T2 // 2, T2 // 2 + (T2 % 2))
+        n_lags = len(xcorr)
+        if n_lags % 2 == 0:
+            lags = np.arange(-n_lags // 2, n_lags // 2)
+        else:
+            lags = np.arange(-(n_lags // 2), (n_lags // 2) + 1)
+        # Restrict to max_lag if specified
+        if max_lag is not None:
+            valid_indices = np.abs(lags) <= max_lag
+            valid_indices = lags <=max_lag 
+            lags = lags[valid_indices]
+            xcorr = xcorr[valid_indices]
+            valid_indices = lags > 0
+            lags = lags[valid_indices]
+            xcorr = xcorr[valid_indices]
+            
+        
+        # Find maximum
+        max_idx = np.argmax(np.abs(xcorr)) if direction == 'positive' else np.argmin(xcorr)
+        max_corr[i] = xcorr[max_idx]
+        best_lag[i] = lags[max_idx]
+    
+    # Create maps
+    xcorr_map = np.zeros((H, W), dtype=float)
+    xcorr_map[roi_mask] = max_corr
+    
+    lag_map = np.zeros((H, W), dtype=float)
+    lag_map[roi_mask] = best_lag
+    
+    # Threshold based on maximum correlation values
+    thr_high = max_corr.mean() + 2.0 * max_corr.std()
+    thr_low = max_corr.mean() - 2.0 * max_corr.std()
+    # thr_high = 0.3
+    # thr_low = -0.3
+    # Refine mask
+    roi_mask_refined = np.zeros((H, W), dtype=bool)
+    if direction == 'positive':
+        roi_mask_refined[roi_mask] = (max_corr >= thr_high)
+    else:
+        roi_mask_refined[roi_mask] = (max_corr <= thr_low)
+    
+    # Extract refined ROI trace
+    roi_trace = stack[:, roi_mask_refined].mean(axis=1)
+    
+    return roi_trace, roi_mask_refined, xcorr_map, lag_map
+
+# def _next_pow2(n):
+#     """Return the next power‑of‑2 ≥ n (used for fast FFT)."""
+#     return 1 << (n - 1).bit_length()
+
+# def get_corr_pixels(substack, stim, roi_mask, *, direction = "positive", max_lag = None,eps = 1e-12):
+#     """
+#     Compute a cross correlation map between a 3D image stack and a stimulus trace.
+
+#     Parameters
+#     ----------
+#     substack : np.ndarray
+#         Shape ``(T, n pixels)``  time series of the whole field of view.
+#     stim : np.ndarray
+#         1D stimulus trace (length ≥ ``T``). Only the first ``T`` samples are used.
+#     roi_mask : np.ndarray
+#         Boolean mask of shape ``(H, W)`` that defines the spatial region
+#         on which the correlation is evaluated.
+#     direction : {"positive", "negative"}, optional
+#         Which side of the correlation distribution is used to build the refined mask.
+#         ``"positive"`` → keep pixels with correlation ≥ ``mean+2*std``.
+#         ``"negative"`` → keep pixels with correlation ≤ ``mean - 2*std``.
+#     max_lag : int | None, optional
+#         Maximum lag (in frames) that will be examined on both sides.
+#         ``None`` means *all* possible lags (``[-T+1, …, T1]``).
+#     eps : float, optional
+#         Small constant added to denominators to avoid division by zero.
+
+#     Returns
+#     -------
+#     roi_trace : np.ndarray
+#         Mean trace of the refined ROI (shape ``(T,)``).
+#     roi_mask_refined : np.ndarray
+#         Boolean mask of shape ``(H, W)`` after thresholding the correlation map.
+#     corr_map : np.ndarray
+#         Full correlation map (shape ``(H, W)``) whose values are the **maximum
+#         correlation coefficient** (over all considered lags) for each pixel.
+#     """
+#     if direction not in {"positive", "negative"}:
+#         raise ValueError("direction must be 'positive' or 'negative'")
+#     if substack.ndim not in {2, 3}:
+#         raise ValueError("substack must have 2 or 3 dimensions")
+#     T = substack.shape[0]
+#     # T, H, W = substack.shape
+#     # assert roi_mask.shape == (H, W), "roi_mask must match substack spatial dimensions"
+#     # # flatten the image stack → (T, Npixels)
+#     # trace_mat = substack.reshape(T, -1)                 # (T, H*W)
+#     # mask_flat = roi_mask.ravel()                       # (H*W,) bool
+#     # trace_masked = trace_mat[:, mask_flat]              # (T, N_mask)
+#     if substack.ndim == 3:                     # full stack (T, H, W)
+#         T, H, W = substack.shape
+#         if roi_mask.shape != (H, W):
+#             raise ValueError("roi_mask shape does not match substack spatial dimensions")
+#         mask_flat = roi_mask.ravel()
+#         # flatten spatial dims, then keep only the ROI pixels
+#         trace_mat = substack.reshape(T, -1)[:, mask_flat]     # (T, N_roi)
+#     else:                                        # already masked (T, N_roi)
+#         # ``roi_mask`` is only needed to rebuild the 2‑D output later.
+#         if roi_mask.ndim != 2:
+#             raise ValueError("roi_mask must be a 2‑D boolean array")
+#         H, W = roi_mask.shape
+#         mask_flat = roi_mask.ravel()
+#         N_expected = mask_flat.sum()
+#         if substack.shape[1] != N_expected:
+#             raise ValueError(
+#                 f"substack has {substack.shape[1]} columns but roi_mask contains "
+#                 f"{N_expected} True pixels"
+#             )
+#         trace_mat = substack                         # already (T, N_roi)
+#     N_roi = trace_mat.shape[1]   
+#     # normalise stimulus and pixel traces (zero‑mean, unit‑variance)
+#     s = stim[:T].astype(float).copy()
+#     s -= s.mean()
+#     s /= (s.std() + eps)                           # now unit‑variance
+#     # normalise pixel traces
+#     trace_mat -= trace_mat.mean(axis=0, keepdims=True)
+#     trace_mat /= (trace_mat.std(axis=0, keepdims=True) + eps)
+#     # full cross‑correlation (FFT version – O(N log N))
+#     # length of linear correlation = 2*T‑1
+#     full_len = 2 * T - 1
+#     nfft = _next_pow2(full_len)
+#     # FFT of all pixel traces (axis=0 = time)
+#     X = np.fft.rfft(trace_mat, n=nfft, axis=0)          # shape (nfft/2+1, N_roi)
+#     # FFT of the stimulus (single vector)
+#     Y = np.fft.rfft(s, n=nfft)                         # shape (nfft/2+1,)
+#     # Conjugate multiplication → cross‑correlation in frequency domain
+#     R = np.fft.irfft(X * np.conj(Y[:, None]), n=nfft, axis=0)   # (nfft, N_roi)
+#     # Keep only the linear‑correlation part
+#     R = R[:full_len, :]                                 # (2*T‑1, N_roi)
+#     # Convert to Pearson‑like correlation coefficient
+#     lags = np.arange(-(T - 1), T)                       # (2*T‑1,)
+#     overlap = (T - np.abs(lags))[:, None]               # (2*T‑1, 1)
+
+#     R_norm = R / (overlap + eps)                        # still (2*T‑1, N_roi)
+#     # Optional lag restriction
+#     if max_lag is not None:
+#         if not (0 <= max_lag < T):
+#             raise ValueError("max_lag must satisfy 0 <= max_lag < T")
+#         keep = np.abs(lags) <= max_lag
+#         R_norm = R_norm[keep, :]
+#         lags = lags[keep]
+#     # Pick the *best* correlation value per pixel
+#     if direction == "positive":
+#         best_idx = np.argmax(R_norm, axis=0)                 # (N_roi,)
+#     else:  # negative
+#         best_idx = np.argmin(R_norm, axis=0)
+#     # advanced indexing to pull the best coefficient
+#     best_corr = R_norm[best_idx, np.arange(N_roi)]
+#     # Build the full‑frame correlation map and the refined ROI mask
+#     corr_map = np.zeros((H, W), dtype=float)
+#     corr_map.ravel()[mask_flat] = best_corr
+#     mu = best_corr.mean()
+#     sigma = best_corr.std()
+#     thr_high = mu + 2.0 * sigma
+#     thr_low = mu - 2.0 * sigma
+#     roi_mask_refined = np.zeros((H, W), dtype=bool)
+#     if direction == "positive":
+#         roi_mask_refined.ravel()[mask_flat] = best_corr >= thr_high
+#     else:
+#         roi_mask_refined.ravel()[mask_flat] = best_corr <= thr_low
+#     # Mean trace of the refined ROI
+#     # indices of the refined ROI in the *flattened* image
+#     refined_flat_idx = np.where(roi_mask_refined.ravel())[0]
+#     if refined_flat_idx.size == 0:
+#         roi_trace = np.zeros(T, dtype=float)
+#     else:
+#         if substack.ndim == 3:
+#             full_flat = substack.reshape(T, -1)          # (T, H*W)
+#             roi_trace = full_flat[:, refined_flat_idx].mean(axis=1)
+#         else:
+#             col_numbers = np.nonzero(mask_flat)[0]          # positions in image → column index
+#             # Build a dict: image‑position → column‑index
+#             pos2col = dict(zip(col_numbers, np.arange(N_roi)))
+#             # Translate refined image positions back to column indices
+#             refined_cols = np.array([pos2col[p] for p in refined_flat_idx], dtype=int)
+#             roi_trace = substack[:, refined_cols].mean(axis=1)
+
+#     return roi_trace, roi_mask_refined, corr_map
+
+
+def get_xcorr_pixels_per_pulse(substack, pulse_protocol, roi_mask, reps, n_pre, n_width, n_post, n_isi, direction, max_lag=None):
+    """
+    Calculate cross-correlation for each pixel by cutting traces into pulse segments (pre+width+post).
+    Only pulse segments that correlate with the stimulus are selected and their traces extracted.
+    
+    Parameters:
+    -----------
+    substack : array (T, n_pixels)
+        Pixel traces within ROI
+    pulse_protocol : array
+        Single pulse protocol (pre + width + post)
+    roi_mask : array (H, W)
+        Boolean ROI mask
+    reps : int
+        Number of pulse repetitions (5)
+    n_pre, n_width, n_post, n_isi : int
+        Frame counts for protocol segments
+    direction : str
+        'positive' or 'negative'
+    max_lag : int or None
+        Maximum lag to consider (None = use full range)
+    
+    Returns:
+    --------
+    roi_trace : array
+        Mean of all selected pulse segments (length = pulse_length)
+    roi_mask_refined : array (H, W)
+        Boolean mask of pixels that have at least one valid pulse
+    xcorr_map : array (H, W)
+        Cross-correlation map (mean of valid pulse max cross-correlations per pixel)
+    lag_map : array (H, W)
+        Mean lag at maximum correlation per pixel
+    pulse_xcorrelations : array (n_valid_pulses,)
+        Maximum cross-correlations for each selected pulse-pixel pair
+    pulse_lags : array (n_valid_pulses,)
+        Lags at maximum correlation for each selected pulse-pixel pair
+    valid_segments : array (n_valid_pulses, pulse_length)
+        All valid pulse segments
+    """
+    T, n_pixels = substack.shape
+    H, W = roi_mask.shape
+    
+    # Calculate pulse segment boundaries
+    pulse_length = n_pre + n_width + n_post
+    onsets = []
+    idx = 0
+    for r in range(reps):
+        idx = idx + n_pre
+        onsets.append(idx)
+        idx = idx + n_width
+        if r < reps - 1:
+            idx = idx + n_post + n_isi
+        else:
+            idx = idx + n_post
+    onsets = np.array(onsets, dtype=int)
+    
+    # Extract pulse segments for each pixel
+    pulse_segments = []
+    for onset in onsets:
+        start = onset - n_pre
+        end = start + pulse_length
+        if end <= T:
+            segment = substack[start:end, :]
+            pulse_segments.append(segment)
+    
+    if len(pulse_segments) == 0:
+        roi_mask_refined = np.zeros((H, W), dtype=bool)
+        xcorr_map = np.zeros((H, W), dtype=float)
+        lag_map = np.zeros((H, W), dtype=float)
+        roi_trace = np.zeros(pulse_length)
+        return roi_trace, roi_mask_refined, xcorr_map, lag_map, np.array([]), np.array([]), np.array([])
+    
+    pulse_segments = np.array(pulse_segments)  # Shape: (reps, pulse_length, n_pixels)
+    
+    # Normalize pulse protocol
+    s = pulse_protocol[:pulse_length].astype(float)
+    s = s - s.mean()
+    s = s / (s.std() + 1e-6)
+    
+    # Calculate cross-correlation for each pulse-pixel pair
+    pulse_xcorrelations = np.zeros((reps, n_pixels))
+    pulse_lags_array = np.zeros((reps, n_pixels), dtype=int)
+    
+    for rep_idx in range(reps):
+        trace_mat = pulse_segments[rep_idx, :, :]  # Shape: (pulse_length, n_pixels)
+        trace_mat = trace_mat - trace_mat.mean(axis=0, keepdims=True)
+        stdx = trace_mat.std(axis=0, keepdims=True) + 1e-6
+        trace_mat = trace_mat / stdx
+        
+        # Calculate cross-correlation for each pixel
+        for pix_idx in range(n_pixels):
+            xcorr = signal.correlate(trace_mat[:, pix_idx], s, mode='same')
+            xcorr = xcorr / pulse_length  # Normalize by length
+            
+            # Define lag range based on actual xcorr length
+            n_lags = len(xcorr)
+            if n_lags % 2 == 0:
+                lags = np.arange(-n_lags // 2, n_lags // 2)
+            else:
+                lags = np.arange(-(n_lags // 2), (n_lags // 2) + 1)
+            
+            # Restrict to max_lag if specified
+            if max_lag is not None:
+                valid_indices = np.abs(lags) <= max_lag
+                xcorr_filtered = xcorr[valid_indices]
+                lags_filtered = lags[valid_indices]
+                valid_indices = lags <=max_lag 
+                lags = lags[valid_indices]
+                xcorr = xcorr[valid_indices]
+                valid_indices = lags > 0
+                lags_filtered = lags[valid_indices]
+                xcorr_filtered = xcorr[valid_indices]
+            else:
+                xcorr_filtered = xcorr
+                lags_filtered = lags
+            
+            # Find maximum
+            if direction == 'positive':
+                max_idx = np.argmax(xcorr_filtered)
+            else:
+                max_idx = np.argmin(xcorr_filtered)
+            
+            pulse_xcorrelations[rep_idx, pix_idx] = xcorr_filtered[max_idx]
+            pulse_lags_array[rep_idx, pix_idx] = lags_filtered[max_idx]
+    
+    # Calculate threshold from ALL pulse-pixel correlations
+    all_xcorrs = pulse_xcorrelations.flatten()
+    thr_high = all_xcorrs.mean() + 2.0 * all_xcorrs.std()
+    thr_low = all_xcorrs.mean() - 2.0 * all_xcorrs.std()
+    # thr_high = np.percentile(all_xcorrs, 99.5)
+    # thr_low = np.percentile(all_xcorrs, 100-99.5)
+    # thr_high = 0.3
+    # thr_low = -0.3
+    
+    # Filter each pulse-pixel pair independently
+    valid_pulse_mask = np.zeros((reps, n_pixels), dtype=bool)
+    
+    if direction == 'positive':
+        valid_pulse_mask = pulse_xcorrelations >= thr_high
+    else:  # negative
+        valid_pulse_mask = pulse_xcorrelations <= thr_low
+    
+    # Collect valid pulse segments and their correlations
+    valid_segments = []
+    valid_xcorrs = []
+    valid_lags = []
+    
+    for rep_idx in range(reps):
+        for pix_idx in range(n_pixels):
+            if valid_pulse_mask[rep_idx, pix_idx]:
+                # Extract this specific pulse segment for this pixel
+                segment = pulse_segments[rep_idx, :, pix_idx]
+                valid_segments.append(segment)
+                valid_xcorrs.append(pulse_xcorrelations[rep_idx, pix_idx])
+                valid_lags.append(pulse_lags_array[rep_idx, pix_idx])
+    
+    # Create outputs
+    if len(valid_segments) > 0:
+        # Stack and average all valid segments to get one pulse-length trace
+        valid_segments = np.array(valid_segments)  # Shape: (n_valid_pulses, pulse_length)
+        roi_trace = valid_segments.mean(axis=0)  # Shape: (pulse_length,)
+        valid_xcorrs = np.array(valid_xcorrs)
+        valid_lags = np.array(valid_lags)
+        
+        # Create pixel-level summary for masks and maps
+        # A pixel is selected if it has at least one valid pulse
+        selected_pixels = valid_pulse_mask.any(axis=0)
+        
+        # Correlation map: mean of valid correlations per pixel
+        mean_xcorr_per_pixel = np.zeros(n_pixels)
+        mean_lag_per_pixel = np.zeros(n_pixels)
+        
+        for pix_idx in range(n_pixels):
+            valid_pulses = valid_pulse_mask[:, pix_idx]
+            if valid_pulses.any():
+                mean_xcorr_per_pixel[pix_idx] = pulse_xcorrelations[valid_pulses, pix_idx].mean()
+                mean_lag_per_pixel[pix_idx] = pulse_lags_array[valid_pulses, pix_idx].mean()
+        
+        roi_mask_refined = np.zeros((H, W), dtype=bool)
+        roi_mask_refined[roi_mask] = selected_pixels
+        
+        xcorr_map = np.zeros((H, W), dtype=float)
+        xcorr_map[roi_mask] = mean_xcorr_per_pixel
+        
+        lag_map = np.zeros((H, W), dtype=float)
+        lag_map[roi_mask] = mean_lag_per_pixel
+    else:
+        roi_trace = np.zeros(0)
+        valid_xcorrs = np.array([])
+        valid_lags = np.array([])
+        valid_segments = np.array([])
+        roi_mask_refined = np.zeros((H, W), dtype=bool)
+        xcorr_map = np.zeros((H, W), dtype=float)
+        lag_map = np.zeros((H, W), dtype=float)
+    
+    return roi_trace, roi_mask_refined, xcorr_map, lag_map, valid_xcorrs, valid_lags, valid_segments
 
 def get_corr_pixels_per_pulse(substack, pulse_protocol, roi_mask, reps, n_pre, n_width, n_post, n_isi, direction):
     """
@@ -1218,9 +1643,9 @@ for condition in os.listdir(processed_recordings):
 
                     # substract temporal mean of each pixel per pixel and frame
                     # Calculate mean for each pixel across all frames
-                    temporal_mean = subtracted.mean(axis=0)
-                    # Subtract the temporal mean frame from each frame
-                    subtracted = subtracted - temporal_mean 
+                    # temporal_mean = subtracted.mean(axis=0)
+                    # # Subtract the temporal mean frame from each frame
+                    # subtracted = subtracted - temporal_mean 
 
                     stack = subtracted
                     stack_shuffled = phase_randomize_stack_vectorized(stack, seed=tif_idx + 42)
@@ -1279,19 +1704,24 @@ for condition in os.listdir(processed_recordings):
                         # tif_result_shuffle_after_filter[direction] = {"dff": dff, 'fps': fps}
                         # tif_pulse_result_shuffle_after_filter[direction] = {'fps': fps, 'pulse_mean': pulse_avg}
 
-                        roi_trace, roi_mask_refined, corr_map, valid_corrs, valid_segments = get_corr_pixels_per_pulse(substack, pulse_protocol, roi_mask, reps, n_pre, n_width, n_post, n_isi, direction)
+                        #######
+                        
+                        # roi_trace, roi_mask_refined, corr_map, valid_corrs, valid_segments = get_corr_pixels_per_pulse(substack, pulse_protocol, roi_mask, reps, n_pre, n_width, n_post, n_isi, direction)
+                        roi_trace, roi_mask_refined, corr_map, lag_map, valid_corrs, valid_lags, valid_segments = get_xcorr_pixels_per_pulse(substack, pulse_protocol, roi_mask, reps, n_pre, n_width, n_post, n_isi, direction, max_lag=fps*1)
                         # dff, dff_pulse, n_pixels_original, pulses_array, pulses, pulse_avg, pulse_protocol = get_dff_cut_pulse(n_pre, n_width, n_post,stack, roi_mask_refined, valid_segments, pulse_protocol, fps)
                         dff, n_pixels_original = get_dff_cut_pulse(roi_trace, n_pre, n_width, n_post,stack, roi_mask_refined, valid_segments, pulse_protocol, fps)
                         plot_tif_results(direction, rep_frame_o, rep_frame, corr_map, roi_mask_refined, output_tif, dff, pulse_protocol, '', n_pixels_original, '_cut_pulse', [], True, [-5, 30])
                         tif_pulse_result_cut_pulse[direction] = {"dff": dff, 'fps': fps}
                         substack_shuff = stack_shuffled[:, roi_mask]
-                        roi_trace, roi_mask_refined, corr_map, valid_corrs, valid_segments = get_corr_pixels_per_pulse(substack_shuff, pulse_protocol, roi_mask, reps, n_pre, n_width, n_post, n_isi, direction)
+                        # roi_trace, roi_mask_refined, corr_map, valid_corrs, valid_segments = get_corr_pixels_per_pulse(substack_shuff, pulse_protocol, roi_mask, reps, n_pre, n_width, n_post, n_isi, direction)
+                        roi_trace, roi_mask_refined, corr_map, lag_map, valid_corrs, valid_lags, valid_segments = get_xcorr_pixels_per_pulse(substack_shuff, pulse_protocol, roi_mask, reps, n_pre, n_width, n_post, n_isi, direction, max_lag=fps*1)
                         # dff, dff_pulse, n_pixels_original, pulses_array, pulses, pulse_avg, pulse_protocol = get_dff_cut_pulse(n_pre, n_width, n_post,stack, roi_mask_refined, valid_segments, pulse_protocol, fps)
                         dff, n_pixels_original = get_dff_cut_pulse(roi_trace, n_pre, n_width, n_post,stack, roi_mask_refined, valid_segments, pulse_protocol, fps)
                         plot_tif_results(direction, rep_frame_o, rep_frame, corr_map, roi_mask_refined, output_tif, dff, pulse_protocol, '(Phase Randomized)', n_pixels_original, '_cut_pulse_shuffled', [], True, [-5, 30])
                         tif_pulse_result_cut_pulse_shuffled[direction] = {"dff": dff, 'fps': fps}
 
-                        roi_trace, roi_mask_refined, corr_map = get_corr_pixels(substack, stim, roi_mask)
+                        # roi_trace, roi_mask_refined, corr_map = get_corr_pixels(substack, stim, roi_mask, direction=direction)
+                        roi_trace, roi_mask_refined, corr_map, lag_map = get_xcorr_pixels(substack, stack, stim, roi_mask, direction=direction, max_lag=fps*1)
                         dff, dff_pulse, n_pixels_original, pulses_array, pulses, pulse_avg, pulse_protocol = get_dff(reps, n_pre, n_width, n_post, n_isi, stack, roi_mask_refined, roi_trace, pulse_protocol, fps)
                         plot_tif_results(direction, rep_frame_o, rep_frame, corr_map, roi_mask_refined, output_tif, dff, stim, '', n_pixels_original, '', dff_pulse, False)
                         # --- Save figures (only for original stack to avoid duplication in first plot) ---
@@ -1300,7 +1730,8 @@ for condition in os.listdir(processed_recordings):
 
 
                         substack_shuff = stack_shuffled[:, roi_mask]
-                        roi_trace, roi_mask_refined, corr_map = get_corr_pixels(substack_shuff, stim, roi_mask)
+                        # roi_trace, roi_mask_refined, corr_map = get_corr_pixels(substack_shuff, stim, roi_mask, direction=direction)
+                        roi_trace, roi_mask_refined, corr_map, lag_map = get_xcorr_pixels(substack_shuff, stack_shuffled, stim, roi_mask, direction=direction, max_lag=fps*1)
                         dff, dff_pulse, n_pixels_original, pulses_array, pulses, pulse_avg, pulse_protocol = get_dff(reps, n_pre, n_width, n_post, n_isi, stack, roi_mask_refined, roi_trace, pulse_protocol, fps)
                         plot_tif_results(direction, rep_frame_o, rep_frame, corr_map, roi_mask_refined, output_tif, dff, stim, '(Phase Randomized)', n_pixels_original, '_shuffled', dff_pulse, False)
                         

@@ -1,7 +1,7 @@
 import numpy as np
 import tifffile as tiff
 import matplotlib.pyplot as plt
-import napari, os
+import napari, os, pickle
 from pathlib import Path
 from skimage.draw import polygon
 import pandas as pd
@@ -55,8 +55,13 @@ roi_mask_refined[roi_mask] = corr >= thr
 If most pixels have low or modest correlation, only the most strongly stimulus-locked pixels (the right tail of the correlation distribution) will pass.
 
 '''
-#TODO: tunable laser
-#TODO: fitler swap
+#TODO: Control: no phase, normal randomize (2)
+#TODO: Control: sleect random pixels (2)
+#TODO: Rewrite: so can run withut plotting all (1)
+#TODO: Rewrite: into funcitons and classes so not same stuff x times (1)
+#TODO: Write: plot distribution for xcorr/ corr (storngest one) and xcorr vs lag (all) (3)
+#TODO: run for all (4)
+#TODO: Write: Final plots  > Illustrator (5)
       
 
 processed_recordings = 'C:/phd/02_twophoton/250611_OA_odor_OL/2_processed_recordings'
@@ -97,33 +102,6 @@ def phase_randomize_stack_vectorized(stack, seed=None):
     
     # Reshape back to original dimensions
     return shuffled.reshape(n_frames, height, width)
-
-
-def phase_randomize_trace(trace, seed=None):
-    """
-    Phase randomization for 1D traces (averaged data).
-    """
-    if seed is not None:
-        np.random.seed(seed)
-    
-    # FFT
-    fft = np.fft.fft(trace)
-    amplitude = np.abs(fft)
-    
-    # Random phases (keep DC and Nyquist real)
-    n = len(trace)
-    random_phase = np.random.uniform(0, 2*np.pi, n)
-    random_phase[0] = 0  # DC component
-    if n % 2 == 0:
-        random_phase[n//2] = 0  # Nyquist frequency
-    
-    # Reconstruct with random phases
-    randomized_fft = amplitude * np.exp(1j * random_phase)
-    
-    # Inverse FFT
-    shuffled = np.real(np.fft.ifft(randomized_fft))
-    
-    return shuffled
 
 def phase_randomize_traces(traces, seed=None):
     """
@@ -409,7 +387,7 @@ def get_xcorr_pixels(substack, stack, stim, roi_mask, *, direction="positive", m
     # Extract refined ROI trace
     roi_trace = stack[:, roi_mask_refined].mean(axis=1)
     
-    return roi_trace, roi_mask_refined, xcorr_map, lag_map
+    return roi_trace, roi_mask_refined, xcorr_map, lag_map, lags, xcorr
 
 # def _next_pow2(n):
 #     """Return the next power‑of‑2 ≥ n (used for fast FFT)."""
@@ -745,7 +723,7 @@ def get_xcorr_pixels_per_pulse(substack, pulse_protocol, roi_mask, reps, n_pre, 
         xcorr_map = np.zeros((H, W), dtype=float)
         lag_map = np.zeros((H, W), dtype=float)
     
-    return roi_trace, roi_mask_refined, xcorr_map, lag_map, valid_xcorrs, valid_lags, valid_segments
+    return roi_trace, roi_mask_refined, xcorr_map, lag_map, valid_xcorrs, valid_lags, valid_segments, pulse_xcorrelations, pulse_lags_array
 
 def get_corr_pixels_per_pulse(substack, pulse_protocol, roi_mask, reps, n_pre, n_width, n_post, n_isi, direction):
     """
@@ -953,92 +931,6 @@ def get_dff_cut_pulse(roi_trace, n_pre, n_width, n_post, stack, roi_mask_refined
     basline = roi_trace[0:n_pre].mean()
     dff = (roi_trace - basline) / (basline + 1e-6)
     return dff, n_pixels_original
-    # """
-    # Calculate dF/F using a global baseline from all selected pixels and pulses.
-    # Baseline is calculated from pre-stimulus periods of all valid segments.
-    
-    # Parameters:
-    # -----------
-    # n_pre, n_width, n_post : int
-    #     Frame counts for protocol segments
-    # stack : array
-    #     Full stack (for pixel count calculation)
-    # roi_mask_refined : array (H, W)
-    #     Boolean mask of selected pixels
-    # valid_segments : list or array (n_valid_pulses, pulse_length)
-    #     Individual valid pulse segments from get_corr_pixels_per_pulse
-    # pulse_protocol : array
-    #     Pulse protocol
-    # fps : float
-    #     Frames per second
-    
-    # Returns:
-    # --------
-    # dff : array (pulse_length,)
-    #     Mean dF/F trace across all valid pulses
-    # dff_pulse : dict
-    #     Dictionary containing pulse statistics
-    # n_pixels_original : int
-    #     Number of pixels in refined ROI
-    # pulses_array : array (n_valid_pulses, pulse_length)
-    #     dF/F for each individual pulse
-    # pulses : list
-    #     List of individual dF/F pulses
-    # pulse_avg : array (pulse_length,)
-    #     Mean dF/F pulse
-    # pulse_protocol : array
-    #     Pulse protocol
-    # """
-    # pulse_length = n_pre + n_width + n_post
-    
-    # # Count pixels in refined ROI
-    # roi_pixels = stack[:, roi_mask_refined]
-    # n_pixels_original = roi_pixels.shape[1]
-    
-    # # Convert to array if needed
-    # if isinstance(valid_segments, list):
-    #     valid_segments = np.array(valid_segments)
-    
-    # if len(valid_segments) == 0:
-    #     pulses_array = np.array([])
-    #     pulse_avg = np.zeros(pulse_length)
-    #     pulse_std = np.zeros(pulse_length)
-    #     pulse_sem = np.zeros(pulse_length)
-    #     dff = pulse_avg
-    #     pulses = []
-    # else:
-    #     # Calculate global baseline from all pre-stimulus periods of all valid segments
-    #     all_baselines = []
-    #     for segment in valid_segments:
-    #         baseline = segment[:n_pre].mean()
-    #         all_baselines.append(baseline)
-        
-    #     # Use mean of all baselines as the global baseline
-    #     global_baseline = np.mean(all_baselines)
-        
-    #     # Calculate dF/F for each pulse using the global baseline
-    #     pulses = []
-    #     for segment in valid_segments:
-    #         dff_pulse_single = (segment - global_baseline) / (global_baseline + 1e-6)
-    #         pulses.append(dff_pulse_single)
-        
-    #     pulses_array = np.array(pulses)  # Shape: (n_valid_pulses, pulse_length)
-    #     pulse_avg = pulses_array.mean(axis=0)
-    #     pulse_std = pulses_array.std(axis=0)
-    #     pulse_sem = pulses_array.std(axis=0) / np.sqrt(len(pulses))
-    #     dff = pulse_avg
-    
-    # dff_pulse = {
-    #     'pulse_mean': pulse_avg,
-    #     'pulse_std': pulse_std,
-    #     'pulse_sem': pulse_sem,
-    #     'individual_pulses': pulses_array,
-    #     'pulse_protocol': pulse_protocol[:pulse_length],
-    #     'n_pulses': len(pulses),
-    #     'fps': fps
-    # }
-    
-    # return dff, dff_pulse, n_pixels_original, pulses_array, pulses, pulse_avg, pulse_protocol
 
 def get_dff_responsive_pixels(stack, roi_mask, stim, reps, n_pre, n_width, n_post, n_isi, direction='positive', 
                                control_mode=None, seed=None):
@@ -1424,10 +1316,10 @@ def plot_tif_results(direction, rep_frame_o, rep_frame, corr_map, roi_mask_refin
         plt.plot(pulse_protocol, 'r', linewidth=1.5, label='Stimulus')
         plt.title(f'Individual pulses and average (n={pulses} pulses), {direction}{title_suffix}')
         plt.ylabel('dF/F')
-        # if direction == 'positive':
-        #     plt.ylim(-5,10)
-        # else:
-        #     plt.ylim(-10,5)
+        if direction == 'positive':
+            plt.ylim(-5,10)
+        else:
+            plt.ylim(-10,5)
         plt.legend()
         plt.subplot(2, 1, 2)
         frames_pulse = np.arange(len(pulse_avg))
@@ -1438,10 +1330,10 @@ def plot_tif_results(direction, rep_frame_o, rep_frame, corr_map, roi_mask_refin
         plt.title(f'Average pulse with SEM, {direction}{title_suffix}')
         plt.xlabel('Frame (relative to pulse onset)')
         plt.ylabel('dF/F')
-        # if direction == 'positive':
-        #     plt.ylim(-5,10)
-        # else:
-        #     plt.ylim(-10,5)
+        if direction == 'positive':
+            plt.ylim(-5,10)
+        else:
+            plt.ylim(-10,5)
         plt.legend()
         plt.tight_layout()
         fig3.savefig(Path(output_tif) / f'pulse_average_{direction}{save_suffix}.png', dpi=400)
@@ -1474,10 +1366,10 @@ def plot_fly_avg(fly_average, stim, tif_files, title_suffix, output_fly, save_st
         plt.title(f'mean across {len(tif_files)} recordings, {direction}{title_suffix}')
         plt.xlabel('Frame')
         plt.ylabel('dF/F')
-        # if direction == 'positive':
-        #     plt.ylim(-2.5,5)
-        # else:
-        #     plt.ylim(-5,2.5)
+        if direction == 'positive':
+            plt.ylim(-2.5,5)
+        else:
+            plt.ylim(-5,2.5)
         plt.tight_layout()
         fig2.savefig(Path(output_fly) / f'all_pixels_{direction}{save_str}.png', dpi=400)
         plt.close(fig2)
@@ -1498,10 +1390,10 @@ def plot_fly_avg(fly_average, stim, tif_files, title_suffix, output_fly, save_st
             plt.title(f'Mean pulse across {fly_pulse_average[direction]["n_tseries"]} TSeries, {direction}{title_suffix}')
             plt.xlabel('Frame (relative to pulse onset)')
             plt.ylabel('dF/F')
-            # if direction == 'positive':
-            #     plt.ylim(-2.5,5)
-            # else:
-            #     plt.ylim(-5,2.5)
+            if direction == 'positive':
+                plt.ylim(-2.5,5)
+            else:
+                plt.ylim(-5,2.5)
             plt.legend()
             plt.tight_layout()
             fig4.savefig(Path(output_fly) / f'pulse_average_{direction}{save_str}.png', dpi=400)
@@ -1533,10 +1425,10 @@ def plot_condition_avg(condition_average, protocoll_new, title_suffix, outpout_c
         # title_suffix = ' (Phase Randomized)' if save_str == '_shuffled' else ''
         plt.title(f'mean across {n_flies} flies, {direction}{title_suffix}')
         plt.xlabel('Frame')
-        # if direction == 'positive':
-        #     plt.ylim(-2.5,5)
-        # else:
-        #     plt.ylim(-5,2.5)
+        if direction == 'positive':
+            plt.ylim(-2.5,5)
+        else:
+            plt.ylim(-5,2.5)
         if ylim:
             plt.ylim(ylim[0], ylim[1])
         plt.ylabel('dF/F')
@@ -1562,22 +1454,256 @@ def plot_condition_avg(condition_average, protocoll_new, title_suffix, outpout_c
                 plt.ylim(ylim[0], ylim[1])
             plt.title(f'Mean pulse across {condition_pulse_average[direction]["n_flies"]} flies, {direction}{title_suffix}')
             plt.xlabel('Frame (relative to pulse onset)')
-            # if direction == 'positive':
-            #     plt.ylim(-2.5,5)
-            # else:
-            #     plt.ylim(-5,2.5)
+            if direction == 'positive':
+                plt.ylim(-2.5,5)
+            else:
+                plt.ylim(-5,2.5)
             plt.ylabel('dF/F')
             plt.legend()
             plt.tight_layout()
             fig5.savefig(Path(outpout_condition) / f'pulse_average_{direction}{save_str}.png', dpi=400)
             plt.close(fig5)
 
+def plot_lag_maps(lag_map, xcorr_map, roi_mask_refined, output_tif, direction, save_str,
+                 title='Spatial Maps', frame_rate=None):
+    """
+    Plot spatial maps of lag and cross-correlation.
+    
+    Parameters:
+    -----------
+    lag_map : array (H, W)
+        Spatial map of lags
+    xcorr_map : array (H, W)
+        Spatial map of cross-correlations
+    roi_mask_refined : array (H, W)
+        Boolean mask of selected pixels
+    title : str
+        Plot title
+    frame_rate : float or None
+        If provided, show lag in seconds
+    """
+    
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+    
+    # 1. Lag map
+    ax1 = axes[0]
+    lag_display = lag_map.copy()
+    lag_display[~roi_mask_refined] = np.nan
+    
+    im1 = ax1.imshow(lag_display, cmap='RdBu_r', aspect='auto')
+    ax1.set_title('Lag Map')
+    ax1.set_xlabel('X (pixels)')
+    ax1.set_ylabel('Y (pixels)')
+    cbar1 = plt.colorbar(im1, ax=ax1)
+    if frame_rate is not None:
+        cbar1.set_label('Lag (seconds)')
+        # Convert colorbar ticks to seconds
+        ticks = cbar1.get_ticks()
+        cbar1.set_ticklabels([f'{t/frame_rate:.2f}' for t in ticks])
+    else:
+        cbar1.set_label('Lag (frames)')
+    
+    # 2. Cross-correlation map
+    ax2 = axes[1]
+    xcorr_display = xcorr_map.copy()
+    xcorr_display[~roi_mask_refined] = np.nan
+    
+    im2 = ax2.imshow(xcorr_display, cmap='viridis', aspect='auto')
+    ax2.set_title('Cross-Correlation Map')
+    ax2.set_xlabel('X (pixels)')
+    ax2.set_ylabel('Y (pixels)')
+    cbar2 = plt.colorbar(im2, ax=ax2)
+    cbar2.set_label('Cross-Correlation')
+    
+    # 3. ROI mask
+    ax3 = axes[2]
+    ax3.imshow(roi_mask_refined, cmap='gray', aspect='auto')
+    ax3.set_title(f'Selected ROI ({roi_mask_refined.sum()} pixels)')
+    ax3.set_xlabel('X (pixels)')
+    ax3.set_ylabel('Y (pixels)')
+    
+    plt.suptitle(title, fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    plt.savefig(Path(output_tif) / f'pulse_average_{direction}{save_str}.png', dpi=400)
+
+def plot_lag_xcorr_distribution(lag_values, xcorr_values, output_condition, save_str, 
+                                normalize=True, bins=50, 
+                                title='Cross-Correlation vs Lag',
+                                frame_rate=None):
+    """
+    Plot cross-correlation values as a function of lag.
+    
+    Parameters:
+    -----------
+    lag_values : array
+        Lag values (in frames)
+    xcorr_values : array
+        Cross-correlation values
+    normalize : bool
+        If True, normalize xcorr to [0, 1]
+    bins : int or array
+        Number of bins or bin edges for lag
+    title : str
+        Plot title
+    frame_rate : float or None
+        If provided, show time in seconds on secondary x-axis
+    """
+    for direciton in ['positive', 'negative']:
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        
+        # Normalize if requested
+        if normalize:
+            xcorr_plot = (xcorr_values - xcorr_values.min()) / (xcorr_values.max() - xcorr_values.min() + 1e-6)
+            ylabel = 'Normalized Cross-Correlation'
+        else:
+            xcorr_plot = xcorr_values
+            ylabel = 'Cross-Correlation'
+        
+        # 1. Scatter plot: xcorr vs lag
+        ax1 = axes[0, 0]
+        scatter = ax1.scatter(lag_values, xcorr_plot, alpha=0.5, s=20, c=xcorr_plot, cmap='viridis')
+        ax1.set_xlabel('Lag (frames)')
+        ax1.set_ylabel(ylabel)
+        ax1.set_title('Cross-Correlation vs Lag (Scatter)')
+        ax1.grid(True, alpha=0.3)
+        ax1.axvline(x=0, color='r', linestyle='--', alpha=0.5, label='Zero lag')
+        ax1.legend()
+        plt.colorbar(scatter, ax=ax1, label=ylabel)
+        
+        # Add time axis if frame_rate provided
+        if frame_rate is not None:
+            ax1_time = ax1.twiny()
+            ax1_time.set_xlim(ax1.get_xlim()[0] / frame_rate, ax1.get_xlim()[1] / frame_rate)
+            ax1_time.set_xlabel('Lag (seconds)')
+        
+        # 2. Binned average: mean xcorr per lag bin
+        ax2 = axes[0, 1]
+        
+        # Create bins
+        if isinstance(bins, int):
+            lag_bins = np.linspace(lag_values.min(), lag_values.max(), bins)
+        else:
+            lag_bins = bins
+        
+        # Bin the data
+        bin_indices = np.digitize(lag_values, lag_bins)
+        bin_centers = (lag_bins[:-1] + lag_bins[1:]) / 2
+        
+        bin_means = []
+        bin_stds = []
+        bin_counts = []
+        
+        for i in range(1, len(lag_bins)):
+            mask = bin_indices == i
+            if mask.any():
+                bin_means.append(xcorr_plot[mask].mean())
+                bin_stds.append(xcorr_plot[mask].std())
+                bin_counts.append(mask.sum())
+            else:
+                bin_means.append(np.nan)
+                bin_stds.append(np.nan)
+                bin_counts.append(0)
+        
+        bin_means = np.array(bin_means)
+        bin_stds = np.array(bin_stds)
+        bin_counts = np.array(bin_counts)
+        
+        # Plot with error bars
+        valid = ~np.isnan(bin_means)
+        ax2.errorbar(bin_centers[valid], bin_means[valid], yerr=bin_stds[valid], 
+                    fmt='o-', capsize=3, capthick=1, linewidth=2, markersize=6)
+        ax2.set_xlabel('Lag (frames)')
+        ax2.set_ylabel(f'Mean {ylabel}')
+        ax2.set_title('Binned Mean Cross-Correlation vs Lag')
+        ax2.grid(True, alpha=0.3)
+        ax2.axvline(x=0, color='r', linestyle='--', alpha=0.5, label='Zero lag')
+        ax2.legend()
+        
+        if frame_rate is not None:
+            ax2_time = ax2.twiny()
+            ax2_time.set_xlim(ax2.get_xlim()[0] / frame_rate, ax2.get_xlim()[1] / frame_rate)
+            ax2_time.set_xlabel('Lag (seconds)')
+        
+        # 3. Histogram of lags (weighted by xcorr magnitude)
+        ax3 = axes[1, 0]
+        
+        # Weight by xcorr magnitude
+        weights = np.abs(xcorr_plot)
+        
+        counts, edges, patches = ax3.hist(lag_values, bins=bins, weights=weights, 
+                                        alpha=0.7, edgecolor='black')
+        ax3.set_xlabel('Lag (frames)')
+        ax3.set_ylabel('Sum of Cross-Correlation')
+        ax3.set_title('Lag Distribution (weighted by xcorr)')
+        ax3.grid(True, alpha=0.3)
+        ax3.axvline(x=0, color='r', linestyle='--', alpha=0.5, label='Zero lag')
+        
+        # Add peak lag
+        peak_lag_idx = np.argmax(counts)
+        peak_lag = (edges[peak_lag_idx] + edges[peak_lag_idx + 1]) / 2
+        ax3.axvline(x=peak_lag, color='orange', linestyle='--', alpha=0.7, 
+                    label=f'Peak lag: {peak_lag:.1f} frames')
+        ax3.legend()
+        
+        if frame_rate is not None:
+            ax3_time = ax3.twiny()
+            ax3_time.set_xlim(ax3.get_xlim()[0] / frame_rate, ax3.get_xlim()[1] / frame_rate)
+            ax3_time.set_xlabel('Lag (seconds)')
+        
+        # 4. Statistics summary
+        ax4 = axes[1, 1]
+        ax4.axis('off')
+        
+        stats_text = f"""
+        Cross-Correlation vs Lag Statistics
+        {'='*45}
+        
+        Total pixels/pulses: {len(lag_values)}
+        
+        Lag (frames):
+        Mean: {lag_values.mean():.2f}
+        Median: {np.median(lag_values):.2f}
+        Std: {lag_values.std():.2f}
+        Range: [{lag_values.min():.0f}, {lag_values.max():.0f}]
+        Peak (weighted): {peak_lag:.1f}
+        """
+        
+        if frame_rate is not None:
+            stats_text += f"""
+        Lag (seconds):
+        Mean: {lag_values.mean() / frame_rate:.3f}
+        Median: {np.median(lag_values) / frame_rate:.3f}
+        Peak (weighted): {peak_lag / frame_rate:.3f}
+        """
+        
+        stats_text += f"""
+        Cross-Correlation:
+        Mean: {xcorr_values.mean():.3f}
+        Median: {np.median(xcorr_values):.3f}
+        Std: {xcorr_values.std():.3f}
+        Range: [{xcorr_values.min():.3f}, {xcorr_values.max():.3f}]
+        
+        Correlation between lag and xcorr:
+        r = {np.corrcoef(lag_values, xcorr_values)[0, 1]:.3f}
+        """
+        
+        ax4.text(0.1, 0.95, stats_text, transform=ax4.transAxes,
+                fontsize=10, verticalalignment='top', fontfamily='monospace',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
+        
+        plt.suptitle(title, fontsize=14, fontweight='bold')
+        plt.tight_layout()
+        plt.savefig(Path(output_condition) / f'pulse_average_{direction}{save_str}.png', dpi=400)
 
 mean_fps = metadata.loc[:, 'fps'].mean()
 for condition in os.listdir(processed_recordings):
     if condition.endswith("_nan"):#or condition == '_LOP_ACV' or condition == '_LO_ACV':
         continue
     print(f'processing {condition}')
+    lag_values_all, xcorr_values_all = [], []
+    lag_values_all_shuffled, xcorr_values_all_shuffled = [], []
+    lag_values_cut_pulse, xcorr_values_cut_pulse = [], []
+    lag_values_cut_pulse_shuffled, xcorr_values_cut_pulse_shuffled = [], []
     condition_results, condition_pulse_results = {}, {}
     condition_pulse_results_cut_pulse, condition_pulse_results_cut_pulse_shuffled = {}, {}
     condition_results_shuffled, condition_pulse_results_shuffled = {}, {}
@@ -1587,8 +1713,25 @@ for condition in os.listdir(processed_recordings):
     region = condition.split('_')[1]
     outpout_condition = f'{processed_recordings}/{condition}'
     if os.path.isdir(f'{processed_recordings}/{condition}'):
+        if os.path.exists(f'{processed_recordings}/{condition}/pulse_average_positive.png'):
+            continue
         for fly in os.listdir(f'{processed_recordings}/{condition}'):
+            all_flies ={}
             if os.path.isdir(f'{processed_recordings}/{condition}/{fly}'):
+                if os.path.exists(f'{processed_recordings}/{condition}/{fly}/pulse_average_positive.png'):
+                    print('skiped', fly)
+                    with open(f'{processed_recordings}/{condition}/{fly}/all_results_tif.pkl', 'rb') as file:
+                        fly_result = pickle.load(file)
+                    condition_pulse_results_cut_pulse[fly] = fly_result["fly_pulse_average_cut_pulse"]
+                    condition_pulse_results_cut_pulse_shuffled[fly] = fly_result["fly_pulse_average_cut_pulse_shuffled"]
+                    condition_results[fly] = fly_result["fly_average"]
+                    condition_results_shuffled[fly] = fly_result["fly_average_shuffled"]
+                    condition_pulse_results_shuffled[fly] = fly_result["fly_pulse_average_shuffled"]
+                    condition_pulse_results[fly] = fly_result["fly_pulse_average"]
+                    print('loaded Results for:  ', fly)
+                    continue
+
+
                 fly_result,fly_pulse_result = {}, {}
                 fly_result_sortdff, fly_pulse_result_sortdff = {}, {}
                 fly_result_shuffle_before_dff, fly_pulse_result_shuffle_before_dff = {}, {}
@@ -1621,6 +1764,7 @@ for condition in os.listdir(processed_recordings):
                     tif_result_shuffled, tif_pulse_result_shuffled = {}, {}
                     print(str(stack_path))
                     tif_name = str(stack_path).split('\\')[-2]
+                    
                     output_tif = f'{processed_recordings}/{condition}/{fly}/{tif_name}'
                     print(f"\nProcessing {tif_idx+1}/{len(tif_files)}: {stack_path.name}")
                     # --- Load stack ---
@@ -1682,6 +1826,20 @@ for condition in os.listdir(processed_recordings):
                             roi_mask = np.logical_or(roi_mask, canvas.astype(bool))
                     # --- Correlation within ROI ---
                     # --- Process both original and shuffled stacks ---
+                    if os.path.exists(f'{processed_recordings}/{condition}/{fly}/{tif_name}/pulse_average_positive.png'):
+                        print('skiped', tif_name)
+                        with open(f'{processed_recordings}/{condition}/{fly}/{tif_name}/all_results_tif.pkl', 'rb') as file:
+                            tif_result = pickle.load(file)
+                        fly_result[tif_name] = tif_result["tif_result"]
+                        fly_pulse_result[tif_name] = tif_result["tif_pulse_result"]
+                        fly_result_shuffled[tif_name] = tif_result["tif_result_shuffled"]
+                        fly_pulse_result_shuffled[tif_name] = tif_result["tif_pulse_result_shuffled"]
+
+                        fly_pulse_result_cut_pulse[tif_name] = tif_result["tif_pulse_result_cut_pulse"]
+                        fly_pulse_result_cut_pulse_shuffled[tif_name] = tif_result["tif_pulse_result_cut_pulse_shuffled"]
+                        print('loaded', tif_name)
+                        continue
+                    all_tiff ={}
                     for direction in ['positive', 'negative']:
                         substack = stack[:, roi_mask]
 
@@ -1707,37 +1865,59 @@ for condition in os.listdir(processed_recordings):
                         #######
                         
                         # roi_trace, roi_mask_refined, corr_map, valid_corrs, valid_segments = get_corr_pixels_per_pulse(substack, pulse_protocol, roi_mask, reps, n_pre, n_width, n_post, n_isi, direction)
-                        roi_trace, roi_mask_refined, corr_map, lag_map, valid_corrs, valid_lags, valid_segments = get_xcorr_pixels_per_pulse(substack, pulse_protocol, roi_mask, reps, n_pre, n_width, n_post, n_isi, direction, max_lag=fps*1)
+                        roi_trace, roi_mask_refined, corr_map, lag_map, valid_corrs, valid_lags, valid_segments, all_xcorr, all_lags = get_xcorr_pixels_per_pulse(substack, pulse_protocol, roi_mask, reps, n_pre, n_width, n_post, n_isi, direction, max_lag=fps*1)
+                        plot_lag_maps(lag_map, corr_map, roi_mask_refined, output_tif, direction, "_cut_pulse_lag_",title='Spatial Maps', frame_rate=1/fps)
+                        if len(all_lags) > 0:
+                            lag_values_cut_pulse.extend(all_lags.flatten() if hasattr(all_lags, 'flatten') else all_lags)
+                            xcorr_values_cut_pulse.extend(all_xcorr.flatten() if hasattr(all_xcorr, 'flatten') else all_xcorr)
                         # dff, dff_pulse, n_pixels_original, pulses_array, pulses, pulse_avg, pulse_protocol = get_dff_cut_pulse(n_pre, n_width, n_post,stack, roi_mask_refined, valid_segments, pulse_protocol, fps)
                         dff, n_pixels_original = get_dff_cut_pulse(roi_trace, n_pre, n_width, n_post,stack, roi_mask_refined, valid_segments, pulse_protocol, fps)
-                        plot_tif_results(direction, rep_frame_o, rep_frame, corr_map, roi_mask_refined, output_tif, dff, pulse_protocol, '', n_pixels_original, '_cut_pulse', [], True, [-5, 30])
+                        plot_tif_results(direction, rep_frame_o, rep_frame, corr_map, roi_mask_refined, output_tif, dff, pulse_protocol, '', n_pixels_original, '_cut_pulse', [], True, [-5, 15])
                         tif_pulse_result_cut_pulse[direction] = {"dff": dff, 'fps': fps}
                         substack_shuff = stack_shuffled[:, roi_mask]
                         # roi_trace, roi_mask_refined, corr_map, valid_corrs, valid_segments = get_corr_pixels_per_pulse(substack_shuff, pulse_protocol, roi_mask, reps, n_pre, n_width, n_post, n_isi, direction)
-                        roi_trace, roi_mask_refined, corr_map, lag_map, valid_corrs, valid_lags, valid_segments = get_xcorr_pixels_per_pulse(substack_shuff, pulse_protocol, roi_mask, reps, n_pre, n_width, n_post, n_isi, direction, max_lag=fps*1)
+                        roi_trace, roi_mask_refined, corr_map, lag_map, valid_corrs, valid_lags, valid_segments, all_xcorr, all_lags = get_xcorr_pixels_per_pulse(substack_shuff, pulse_protocol, roi_mask, reps, n_pre, n_width, n_post, n_isi, direction, max_lag=fps*1)
+                        plot_lag_maps(lag_map, corr_map, roi_mask_refined, output_tif, direction, "_cut_pulse_lag_shuffled_",title='Spatial Maps (Phase Randomized)', frame_rate=1/fps)
+                        if len(all_lags) > 0:
+                            lag_values_cut_pulse_shuffled.extend(all_lags.flatten() if hasattr(all_lags, 'flatten') else all_lags)
+                            xcorr_values_cut_pulse_shuffled.extend(all_xcorr.flatten() if hasattr(all_xcorr, 'flatten') else all_xcorr)
                         # dff, dff_pulse, n_pixels_original, pulses_array, pulses, pulse_avg, pulse_protocol = get_dff_cut_pulse(n_pre, n_width, n_post,stack, roi_mask_refined, valid_segments, pulse_protocol, fps)
                         dff, n_pixels_original = get_dff_cut_pulse(roi_trace, n_pre, n_width, n_post,stack, roi_mask_refined, valid_segments, pulse_protocol, fps)
-                        plot_tif_results(direction, rep_frame_o, rep_frame, corr_map, roi_mask_refined, output_tif, dff, pulse_protocol, '(Phase Randomized)', n_pixels_original, '_cut_pulse_shuffled', [], True, [-5, 30])
+                        plot_tif_results(direction, rep_frame_o, rep_frame, corr_map, roi_mask_refined, output_tif, dff, pulse_protocol, '(Phase Randomized)', n_pixels_original, '_cut_pulse_shuffled', [], True, [-5, 15])
                         tif_pulse_result_cut_pulse_shuffled[direction] = {"dff": dff, 'fps': fps}
 
                         # roi_trace, roi_mask_refined, corr_map = get_corr_pixels(substack, stim, roi_mask, direction=direction)
-                        roi_trace, roi_mask_refined, corr_map, lag_map = get_xcorr_pixels(substack, stack, stim, roi_mask, direction=direction, max_lag=fps*1)
+                        roi_trace, roi_mask_refined, corr_map, lag_map, all_lags, all_xcorr = get_xcorr_pixels(substack, stack, stim, roi_mask, direction=direction, max_lag=fps*1)
+                        if len(all_lags) > 0:
+                            lag_values_all.extend(all_lags.flatten() if hasattr(all_lags, 'flatten') else all_lags)
+                            xcorr_values_all.extend(all_xcorr.flatten() if hasattr(all_xcorr, 'flatten') else all_xcorr)
+                        plot_lag_maps(lag_map, corr_map, roi_mask_refined, output_tif, direction, "",title='Spatial Maps ', frame_rate=1/fps)
                         dff, dff_pulse, n_pixels_original, pulses_array, pulses, pulse_avg, pulse_protocol = get_dff(reps, n_pre, n_width, n_post, n_isi, stack, roi_mask_refined, roi_trace, pulse_protocol, fps)
-                        plot_tif_results(direction, rep_frame_o, rep_frame, corr_map, roi_mask_refined, output_tif, dff, stim, '', n_pixels_original, '', dff_pulse, False)
+                        plot_tif_results(direction, rep_frame_o, rep_frame, corr_map, roi_mask_refined, output_tif, dff, stim, '', n_pixels_original, '', dff_pulse, False,  [-5, 15])
                         # --- Save figures (only for original stack to avoid duplication in first plot) ---
                         tif_result[direction] = {"dff": dff, 'fps': fps}
                         tif_pulse_result[direction] = {'fps': fps, 'pulse_mean': pulse_avg}
-
-
                         substack_shuff = stack_shuffled[:, roi_mask]
                         # roi_trace, roi_mask_refined, corr_map = get_corr_pixels(substack_shuff, stim, roi_mask, direction=direction)
-                        roi_trace, roi_mask_refined, corr_map, lag_map = get_xcorr_pixels(substack_shuff, stack_shuffled, stim, roi_mask, direction=direction, max_lag=fps*1)
+                        roi_trace, roi_mask_refined, corr_map, lag_map, all_lags, all_xcorr = get_xcorr_pixels(substack_shuff, stack_shuffled, stim, roi_mask, direction=direction, max_lag=fps*1)
+                        if len(all_lags) > 0:
+                            lag_values_all_shuffled.extend(all_lags.flatten() if hasattr(all_lags, 'flatten') else all_lags)
+                            xcorr_values_all_shuffled.extend(all_xcorr.flatten() if hasattr(all_xcorr, 'flatten') else all_xcorr)
+                        plot_lag_maps(lag_map, corr_map, roi_mask_refined, output_tif, direction, "_lag_shuffeled_",title='Spatial Maps (Phase Randomized)', frame_rate=1/fps)
                         dff, dff_pulse, n_pixels_original, pulses_array, pulses, pulse_avg, pulse_protocol = get_dff(reps, n_pre, n_width, n_post, n_isi, stack, roi_mask_refined, roi_trace, pulse_protocol, fps)
-                        plot_tif_results(direction, rep_frame_o, rep_frame, corr_map, roi_mask_refined, output_tif, dff, stim, '(Phase Randomized)', n_pixels_original, '_shuffled', dff_pulse, False)
+                        plot_tif_results(direction, rep_frame_o, rep_frame, corr_map, roi_mask_refined, output_tif, dff, stim, '(Phase Randomized)', n_pixels_original, '_shuffled', dff_pulse, False,  [-5, 15])
                         
                         tif_result_shuffled[direction] = {"dff": dff, 'fps': fps}
                         tif_pulse_result_shuffled[direction] = {'fps': fps, 'pulse_mean': pulse_avg}
-                    
+                    all_tiff['tif_result'] = tif_result
+                    all_tiff['tif_pulse_result'] = tif_pulse_result
+                    all_tiff['tif_result_shuffled'] = tif_result_shuffled
+                    all_tiff['tif_pulse_result_shuffled'] = tif_pulse_result_shuffled
+                    all_tiff['tif_pulse_result_cut_pulse'] = tif_pulse_result_cut_pulse
+                    all_tiff['tif_pulse_result_cut_pulse_shuffled'] = tif_pulse_result_cut_pulse_shuffled
+                    with open(f'{processed_recordings}/{condition}/{fly}/{tif_name}/all_results_tif.pkl', "wb") as fp:
+                        pickle.dump(all_tiff, fp) 
+
                     fly_result[tif_name] = tif_result
                     fly_pulse_result[tif_name] = tif_pulse_result
                     fly_result_shuffled[tif_name] = tif_result_shuffled
@@ -1746,6 +1926,7 @@ for condition in os.listdir(processed_recordings):
                     fly_pulse_result_cut_pulse[tif_name] = tif_pulse_result_cut_pulse
                     fly_pulse_result_cut_pulse_shuffled[tif_name] = tif_pulse_result_cut_pulse_shuffled
 
+                    
                     # fly_result_sortdff[tif_name] = tif_result_sortdff
                     # fly_pulse_result_sortdff[tif_name] = tif_pulse_result_sortdff
 
@@ -1754,7 +1935,6 @@ for condition in os.listdir(processed_recordings):
 
                     # fly_result_shuffle_after_filter[tif_name] = tif_result_shuffle_after_filter
                     # fly_pulse_result_shuffle_after_filter[tif_name] = tif_pulse_result_shuffle_after_filter
-
                 fly_pulse_average_cut_pulse = average_across_tseries(fly_pulse_result_cut_pulse)
                 plot_fly_avg(fly_pulse_average_cut_pulse, pulse_protocol, tif_files, '', output_fly, '_cut_pulse', [], pulse_protocol, True)
                 fly_pulse_average_cut_pulse = interpolate_to_mean_fps(fly_pulse_average_cut_pulse, mean_fps)
@@ -1805,6 +1985,16 @@ for condition in os.listdir(processed_recordings):
                 condition_results_shuffled[fly] = fly_average_shuffled
                 fly_pulse_average_shuffled = interpolate_to_mean_fps(fly_pulse_average_shuffled, mean_fps)
                 condition_pulse_results_shuffled[fly] = fly_pulse_average_shuffled
+
+                all_flies["fly_pulse_average_cut_pulse"] = fly_pulse_average_cut_pulse
+                all_flies["fly_pulse_average_cut_pulse_shuffled"] = fly_pulse_average_cut_pulse_shuffled
+                all_flies["fly_average"] = fly_average
+                all_flies["fly_pulse_average"] = fly_pulse_average
+                all_flies["fly_average_shuffled"] = fly_average_shuffled
+                all_flies["fly_pulse_average_shuffled"] = fly_pulse_average_shuffled
+
+                with open(f'{processed_recordings}/{condition}/{fly}/all_results_flies.pkl', "wb") as fp:
+                        pickle.dump(all_flies, fp) 
                 
     else:
         continue
@@ -1824,7 +2014,6 @@ for condition in os.listdir(processed_recordings):
     # plot_condition_avg(condition_average, protocoll_new, '(Phase Randomized)', outpout_condition, '_shuffle_after_filter', condition_pulse_average, pulse_protocol_new, False)
 
 
-
     condition_pulse_average_cut_pulse = average_across_flies(condition_pulse_results_cut_pulse)
     plot_condition_avg(condition_pulse_average_cut_pulse, pulse_protocol_new, '', outpout_condition, '_cut_pulse', [], pulse_protocol_new, True, [-1,8])
 
@@ -1832,7 +2021,24 @@ for condition in os.listdir(processed_recordings):
     plot_condition_avg(condition_pulse_average_cut_pulse_shuffled, pulse_protocol_new, '(Phase Randomized)', outpout_condition, '_cut_pulse_shuffled', [], pulse_protocol_new, True, [-1,8])
 
 
-
+    lag_values_all = np.array(lag_values_all)
+    xcorr_values_all = np.array(xcorr_values_all)
+    lag_values_all_shuffled = np.array(lag_values_all_shuffled)
+    xcorr_values_all_shuffled = np.array(xcorr_values_all_shuffled)
+    lag_values_cut_pulse = np.array(lag_values_cut_pulse)
+    xcorr_values_cut_pulse = np.array(xcorr_values_cut_pulse)
+    lag_values_cut_pulse_shuffled = np.array(lag_values_cut_pulse_shuffled)
+    xcorr_values_cut_pulse_shuffled = np.array(xcorr_values_cut_pulse_shuffled)
+    
+    # Plot all distributions
+    if len(lag_values_all) > 0:
+        plot_lag_xcorr_distribution(lag_values_all, xcorr_values_all, outpout_condition, "_lag_xcorr_distribution_", normalize=True, bins=50, title='Cross-Correlation vs Lag', frame_rate=1/fps)
+    if len(lag_values_all_shuffled) > 0:
+        plot_lag_xcorr_distribution(lag_values_all_shuffled, xcorr_values_all_shuffled, outpout_condition, "_lag_xcorr_distribution_shuffled", normalize=True, bins=50, title='Cross-Correlation vs Lag (Shuffled)', frame_rate=1/fps)
+    if len(lag_values_cut_pulse) > 0:
+        plot_lag_xcorr_distribution(lag_values_cut_pulse, xcorr_values_cut_pulse, outpout_condition, "_lag_xcorr_cut_pulse_distribution_", normalize=True, bins=50, title='Cross-Correlation vs Lag (Cut Pulse)', frame_rate=1/fps)
+    if len(lag_values_cut_pulse_shuffled) > 0:
+        plot_lag_xcorr_distribution(lag_values_cut_pulse_shuffled, xcorr_values_cut_pulse_shuffled, outpout_condition, "_lag_xcorr_cut_pulse_distribution_shuffled", normalize=True, bins=50, title='Cross-Correlation vs Lag (Cut Pulse Shuffled)', frame_rate=1/fps)
 
     condition_average = average_across_flies(condition_results)
     condition_pulse_average = average_across_flies(condition_pulse_results)
@@ -1842,66 +2048,3 @@ for condition in os.listdir(processed_recordings):
     condition_pulse_average_shuffled = average_across_flies(condition_pulse_results_shuffled)
     plot_condition_avg(condition_average_shuffled, protocoll_new, '(Phase Randomized)', outpout_condition, '_shuffled', condition_pulse_average_shuffled, pulse_protocol_new, False, [-1,3])
     
-    
-    
-
-    #if pulse_corrs.shape[1] > 0:  # Wenn Pixel gefunden wurden
-    # fig_pulse = plt.figure(figsize=(14, 10))
-    
-    # # Plot 1: Correlation map
-    # ax1 = plt.subplot(2, 2, 1)
-    # im = ax1.imshow(corr_map, cmap='magma')
-    # ax1.set_title(f'{direction}: Max Correlation Map\\n({pulse_corrs.shape[1]} pixels)')
-    # ax1.axis('off')
-    # plt.colorbar(im, ax=ax1, fraction=0.046)
-    
-    # # Plot 2: Heatmap - only significant correlations
-    # ax2 = plt.subplot(2, 2, 2)
-    # pulse_corrs_masked = pulse_corrs.copy()
-    # pulse_corrs_masked[~sig_pulses] = np.nan  # Mask non-significant
-    # im = ax2.imshow(pulse_corrs_masked.T, aspect='auto', cmap='RdBu_r', 
-    #                 vmin=-1, vmax=1, interpolation='nearest')
-    # ax2.set_xlabel('Pulse Number')
-    # ax2.set_ylabel('Pixel Index')
-    # ax2.set_title(f'Significant Correlations Only\\n(gray = not significant)')
-    # ax2.set_xticks(np.arange(reps))
-    # ax2.set_xticklabels(np.arange(1, reps+1))
-    # plt.colorbar(im, ax=ax2, label='Correlation')
-    
-    # # Plot 3: Histogram of responsive pulses per pixel
-    # ax3 = plt.subplot(2, 2, 3)
-    # n_responsive_pulses = sig_pulses.sum(axis=0)
-    # ax3.hist(n_responsive_pulses, bins=np.arange(0.5, reps+1.5), 
-    #         edgecolor='black', alpha=0.7, color='steelblue')
-    # ax3.set_xlabel('Number of Responsive Pulses')
-    # ax3.set_ylabel('Number of Pixels')
-    # ax3.set_title('Response Consistency Distribution')
-    # ax3.set_xticks(np.arange(1, reps+1))
-    # ax3.grid(alpha=0.3, axis='y')
-    
-    # # Plot 4: Mean correlation per pulse (only significant)
-    # ax4 = plt.subplot(2, 2, 4)
-    # pulse_ids = np.arange(1, reps+1)
-    # mean_per_pulse = []
-    # std_per_pulse = []
-    # for rep_idx in range(reps):
-    #     sig_corrs = pulse_corrs[rep_idx, sig_pulses[rep_idx, :]]
-    #     if len(sig_corrs) > 0:
-    #         mean_per_pulse.append(sig_corrs.mean())
-    #         std_per_pulse.append(sig_corrs.std())
-    #     else:
-    #         mean_per_pulse.append(0)
-    #         std_per_pulse.append(0)
-    
-    # ax4.errorbar(pulse_ids, mean_per_pulse, yerr=std_per_pulse,
-    #             marker='o', linewidth=2, capsize=5, color='k', markersize=8)
-    # ax4.axhline(0, color='gray', linestyle='--', alpha=0.5)
-    # ax4.set_xlabel('Pulse Number')
-    # ax4.set_ylabel('Mean Correlation (significant only)')
-    # ax4.set_title('Significant Correlation per Pulse')
-    # ax4.grid(alpha=0.3)
-    # ax4.set_xticks(pulse_ids)
-    
-    # plt.tight_layout()
-    # fig_pulse.savefig(Path(output_tif) / f'pulse_correlation_{direction}.png', dpi=400)
-    # plt.close(fig_pulse)

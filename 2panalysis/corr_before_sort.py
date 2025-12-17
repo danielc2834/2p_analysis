@@ -59,7 +59,9 @@ If most pixels have low or modest correlation, only the most strongly stimulus-l
 #TODO: Control: sleect random pixels (2)
 #TODO: Rewrite: so can run withut plotting all (1)
 #TODO: Rewrite: into funcitons and classes so not same stuff x times (1)
+#TODO: Rewrite: corr, xcorr, shuffled phase, shuffled time >> all with whoel trace and only pulse
 #TODO: Write: plot distribution for xcorr/ corr (storngest one) and xcorr vs lag (all) (3)
+#TODO: wmoothin all_pixel;_result_avg traces?
 #TODO: run for all (4)
 #TODO: Write: Final plots  > Illustrator (5)
       
@@ -1720,7 +1722,7 @@ for condition in os.listdir(processed_recordings):
             if os.path.isdir(f'{processed_recordings}/{condition}/{fly}'):
                 if os.path.exists(f'{processed_recordings}/{condition}/{fly}/pulse_average_positive.png'):
                     print('skiped', fly)
-                    with open(f'{processed_recordings}/{condition}/{fly}/all_results_tif.pkl', 'rb') as file:
+                    with open(f'{processed_recordings}/{condition}/{fly}/all_results_flies.pkl', 'rb') as file:
                         fly_result = pickle.load(file)
                     condition_pulse_results_cut_pulse[fly] = fly_result["fly_pulse_average_cut_pulse"]
                     condition_pulse_results_cut_pulse_shuffled[fly] = fly_result["fly_pulse_average_cut_pulse_shuffled"]
@@ -1803,7 +1805,11 @@ for condition in os.listdir(processed_recordings):
                     else:
                         stim = protocol.copy()
                     # --- Napari selection (only for first file) ---
-                    if tif_idx == 0:
+                    if os.path.exists(f'{processed_recordings}/{condition}/{fly}/_ROIS_skipp.pkl') == True:
+                        with open(f'{processed_recordings}/{condition}/{fly}/_ROIS_skipp.pkl', 'rb') as fo:
+                            roi_mask_skipp = pickle.load(fo)
+                        roi_mask = roi_mask_skipp['roi_mask']
+                    elif tif_idx == 0 and os.path.exists(f'{processed_recordings}/{condition}/{fly}/_ROIS_skipp.pkl') == False:
                         viewer = napari.Viewer()
                         image_layer = viewer.add_image(rep_frame_o, name='median')
                         shapes = viewer.add_shapes(name='ROI', edge_color='cyan', face_color='cyan', opacity=0.2)
@@ -1824,21 +1830,49 @@ for condition in os.listdir(processed_recordings):
                                 x1 = int(np.max(data[:, 1]))
                                 canvas[y0:y1+1, x0:x1+1] = 1
                             roi_mask = np.logical_or(roi_mask, canvas.astype(bool))
+                        roi_mask_skipp = {"roi_mask": roi_mask}
+                        with open(f'{processed_recordings}/{condition}/{fly}/_ROIS_skipp.pkl', 'wb') as fo:
+                            pickle.dump(roi_mask_skipp, fo)
+                    elif tif_idx > 0 and os.path.exists(f'{processed_recordings}/{condition}/{fly}/_ROIS_skipp.pkl') == False:
+                        viewer = napari.Viewer()
+                        image_layer = viewer.add_image(rep_frame_o, name='median')
+                        shapes = viewer.add_shapes(name='ROI', edge_color='cyan', face_color='cyan', opacity=0.2)
+                        shapes.mode = 'add_polygon'
+                        napari.run()
+                        
+                        # Convert shapes to mask (union of all drawn shapes)
+                        roi_mask = np.zeros((H, W), dtype=bool)
+                        for data, shape_type in zip(shapes.data, shapes.shape_type):
+                            canvas = np.zeros((H, W), dtype=np.uint8)
+                            if shape_type in ['polygon', 'path']:
+                                rr, cc = polygon(data[:, 0], data[:, 1], shape=(H, W))
+                                canvas[rr, cc] = 1
+                            elif shape_type in ['rectangle', 'ellipse']:
+                                y0 = int(np.min(data[:, 0]))
+                                y1 = int(np.max(data[:, 0]))
+                                x0 = int(np.min(data[:, 1]))
+                                x1 = int(np.max(data[:, 1]))
+                                canvas[y0:y1+1, x0:x1+1] = 1
+                            roi_mask = np.logical_or(roi_mask, canvas.astype(bool))
+                        roi_mask_skipp = {"roi_mask": roi_mask}
+                        with open(f'{processed_recordings}/{condition}/{fly}/_ROIS_skipp.pkl', 'wb') as fo:
+                            pickle.dump(roi_mask_skipp, fo)
+                    
                     # --- Correlation within ROI ---
                     # --- Process both original and shuffled stacks ---
-                    if os.path.exists(f'{processed_recordings}/{condition}/{fly}/{tif_name}/pulse_average_positive.png'):
-                        print('skiped', tif_name)
-                        with open(f'{processed_recordings}/{condition}/{fly}/{tif_name}/all_results_tif.pkl', 'rb') as file:
-                            tif_result = pickle.load(file)
-                        fly_result[tif_name] = tif_result["tif_result"]
-                        fly_pulse_result[tif_name] = tif_result["tif_pulse_result"]
-                        fly_result_shuffled[tif_name] = tif_result["tif_result_shuffled"]
-                        fly_pulse_result_shuffled[tif_name] = tif_result["tif_pulse_result_shuffled"]
+                    # if os.path.exists(f'{processed_recordings}/{condition}/{fly}/{tif_name}/pulse_average_positive.png'):
+                    #     print('skiped', tif_name)
+                    #     with open(f'{processed_recordings}/{condition}/{fly}/{tif_name}/all_results_tif.pkl', 'rb') as file:
+                    #         tif_result = pickle.load(file)
+                    #     fly_result[tif_name] = tif_result["tif_result"]
+                    #     fly_pulse_result[tif_name] = tif_result["tif_pulse_result"]
+                    #     fly_result_shuffled[tif_name] = tif_result["tif_result_shuffled"]
+                    #     fly_pulse_result_shuffled[tif_name] = tif_result["tif_pulse_result_shuffled"]
 
-                        fly_pulse_result_cut_pulse[tif_name] = tif_result["tif_pulse_result_cut_pulse"]
-                        fly_pulse_result_cut_pulse_shuffled[tif_name] = tif_result["tif_pulse_result_cut_pulse_shuffled"]
-                        print('loaded', tif_name)
-                        continue
+                    #     fly_pulse_result_cut_pulse[tif_name] = tif_result["tif_pulse_result_cut_pulse"]
+                    #     fly_pulse_result_cut_pulse_shuffled[tif_name] = tif_result["tif_pulse_result_cut_pulse_shuffled"]
+                    #     print('loaded', tif_name)
+                    #     continue
                     all_tiff ={}
                     for direction in ['positive', 'negative']:
                         substack = stack[:, roi_mask]

@@ -12,6 +12,8 @@ from numpy.typing import NDArray
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from collections import defaultdict
 import seaborn as sns
+import matplotlib.ticker as ticker
+import matplotlib as mpl
 #################################Setup
 #laptop folder
 dataset_folder = 'C:/phd/02_twophoton/250611_OA_odor_OL' 
@@ -319,11 +321,13 @@ class tseries:
                 self.corr_results['corr_values_filtered'] = self.corr_results['corr_values_all'][valid_indices]
                 # Pixel-level summaries
                 selected_pixels = valid_mask.any(axis=0)
-                mean_val_per_pixel = np.array([
-                    values[valid_mask[:, i], i].mean() if valid_mask[:, i].any() else 0 for i in range(n_pixels)])
+                # mean_val_per_pixel = np.array([
+                #     values[valid_mask[:, i], i].mean() if valid_mask[:, i].any() else 0 for i in range(n_pixels)])
+                mean_val_per_pixel = np.array([values[:, i].mean() for i in range(n_pixels)])
                 if method == 'xcorr':
-                    mean_lag_per_pixel = np.array([
-                        lags[valid_mask[:, i], i].mean() if valid_mask[:, i].any() else 0 for i in range(n_pixels)])
+                    # mean_lag_per_pixel = np.array([
+                    #     lags[valid_mask[:, i], i].mean() if valid_mask[:, i].any() else 0 for i in range(n_pixels)])
+                    mean_lag_per_pixel = np.array([lags[:, i].mean() for i in range(n_pixels)])
                     self.corr_results['lag_map'][roi_mask] = mean_lag_per_pixel
                     self.corr_results['all_optimal_lags'] = lags[valid_mask].flatten()
             else:
@@ -535,30 +539,37 @@ class tseries:
         corr_method, shuffle_method, thresh, trace = args
         dff_results = self.dff_results
         os.makedirs(self.output / str(thresh) , exist_ok=True)
-        fig1 = plt.figure(figsize=(14, 4))
-        plt.suptitle(f'{direction} - ROI Selection', fontsize=16, fontweight='bold')
-        plt.subplot(1, 4, 1)
-        plt.imshow(self.median_stack, cmap='gray')
-        plt.title('Median frame (for ROI)')
-        plt.subplot(1, 4, 2)
-        plt.imshow(self.median_stack_subtracted, cmap='gray')
+        fig1, axs = plt.subplots(1, 4, figsize=(14, 4),constrained_layout=True)
+        axs[0].imshow(self.median_stack, cmap='gray')
+        axs[0].set_title('Median frame (for ROI)')
+        axs[1].imshow(self.median_stack_subtracted, cmap='gray')
         overlay = np.zeros((*self.median_stack_subtracted.shape, 4))
-        overlay[self.roi_mask, :] = [0, 1, 1, 0.3]
-        plt.imshow(overlay)
-        plt.title('Selected napari region on median (subtracted) frame')
-        plt.subplot(1, 4, 3)
+        overlay[self.roi_mask, :] = [0, 1, 1, 0.3] 
+        axs[1].imshow(overlay)
+        axs[1].set_title('Selected napari region on median (subtracted) frame')
+        if corr_method != 'rand':
+            display1 = self.corr_results['corr_map'].copy()
+            display1[~self.roi_mask] = np.nan
+            display = self.corr_results['corr_map'].copy()
+            display[~self.corr_results['roi_mask_refined']] = np.nan
+            all_vals = np.concatenate([display.ravel(), display1.ravel()])
+            vmin = np.nanmin(all_vals)
+            vmax = np.nanmax(all_vals)
+            norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax)
         if corr_method == 'rand':
-            plt.imshow(self.median_stack_subtracted, cmap='gray')
-            plt.imshow(overlay)
-            plt.title('spaceholder')
+            axs[2].imshow(self.median_stack_subtracted, cmap='gray')
+            axs[2].imshow(overlay)
+            axs[2].set_title('spaceholder')
+            im4 = axs[3].imshow(self.corr_results['roi_mask_refined'], cmap='magma')
         else:
-            plt.imshow(self.corr_results['corr_map'], cmap='magma')
-            plt.title('Correlation map inside drawn ROI')
-            plt.colorbar(fraction=0.046, pad=0.04)
-        plt.subplot(1, 4, 4)
-        plt.imshow(self.corr_results['roi_mask_refined'], cmap='Greens')
-        plt.title('Refined ROI mask (corr-threshold)')
-        plt.tight_layout()
+            im3 = axs[2].imshow(display1, cmap='magma', norm=norm)
+            axs[2].set_title('Correlation map inside drawn ROI')
+            im4 = axs[3].imshow(display, cmap='magma', norm=norm)
+        axs[3].set_title('Refined ROI mask (corr-threshold)')
+        cbar = fig1.colorbar(im4, ax=[axs[2], axs[3]],fraction=0.046, pad=0.04)
+        cbar.set_label('Correlation coefficient')
+        fig1.suptitle(f'{direction} - ROI Selection',fontsize=16, fontweight='bold')
+        # fig1.subplots_adjust(top=0.88)
         fig1.savefig(self.output / str(thresh)  / f"{corr_method}_{shuffle_method}_{trace}_{direction}_roi_selection.png", dpi=400)
         plt.close(fig1)
         # Save dF/F trace figure
@@ -568,14 +579,19 @@ class tseries:
         else:
             fig2 = plt.figure(figsize=(6, 6))
             stim = self.dff_results['pulse_protocol']
-        plt.plot(dff_results['dff_trace'], color='k', linewidth=1.2)
-        plt.plot(stim, color='r')
-        # title_suffix = ' (Phase Randomized)' if stack_type == 'shuffled' else ''
-        plt.title(f'ROI mean trace dF/F with stimulus epochs (n={dff_results["n_pixels"]} pixels), {direction}({shuffle_method} Randomized)')
+        len_in_s = len(dff_results['dff_trace']) / dff_results['fps']
+        x_in_s = np.arange(0, len_in_s, 1/dff_results['fps'])
+        x_in_s = x_in_s[:len(dff_results['dff_trace'])]
+        plt.plot(x_in_s, dff_results['dff_trace'], color='k', linewidth=1.2)
+        plt.plot(x_in_s, stim, color='r')
+        plt.title(f'ROI mean trace dF/F with stimulus epochs (n={dff_results["n_pixels"]} pixels), \n {direction}({shuffle_method} Randomized)')
         plt.xlabel('Frame')
         plt.ylabel('dF/F')
-        # if ylim:
-        #     plt.ylim(ylim[0], ylim[1])
+        if direction == 'above':
+            plt.ylim(-5,10)
+        else:
+            plt.ylim(-10,5)
+        plt.xlim(0,len_in_s)
         plt.tight_layout()
         fig2.savefig(self.output / str(thresh) / f"{corr_method}_{shuffle_method}_{trace}_{direction}_dff_trace.png", dpi=400)
         plt.close(fig2)
@@ -586,27 +602,31 @@ class tseries:
             pulse_sem = dff_results['pulse_sem']
             pulses = dff_results['n_pulses']
             # Save pulse average figure
+            len_in_s = len(pulse_avg) / dff_results['fps']
+            x_in_s = np.arange(0, len_in_s, 1/dff_results['fps'])
+            x_in_s = x_in_s[:len(pulse_avg)]
             fig3 = plt.figure(figsize=(6, 12))
             plt.subplot(2, 1, 1)
             if pulses_array is not None:
                 for i, pulse in enumerate(pulses_array):
-                    plt.plot(pulse, 'grey', alpha=0.3, linewidth=0.8)
-            plt.plot(pulse_avg, 'k', linewidth=2, label='Average across pulses')
-            plt.plot(pulse_protocol, 'r', linewidth=1.5, label='Stimulus')
-            plt.title(f'Individual pulses and average (n={pulses} pulses), {direction}({shuffle_method} Randomized)')
+                    plt.plot(x_in_s, pulse, 'grey', alpha=0.3, linewidth=0.8)
+            plt.plot(x_in_s, pulse_avg, 'k', linewidth=2, label='Average across pulses')
+            plt.plot(x_in_s, pulse_protocol, 'r', linewidth=1.5, label='Stimulus')
+            plt.title(f'Individual pulses and average (n={pulses} pulses), \n {direction}({shuffle_method} Randomized)')
             plt.ylabel('dF/F')
             if direction == 'above':
                 plt.ylim(-5,10)
             else:
                 plt.ylim(-10,5)
+            plt.xlim(0,len_in_s)
             plt.legend()
             plt.subplot(2, 1, 2)
-            frames_pulse = np.arange(len(pulse_avg))
-            plt.plot(pulse_avg, 'k', linewidth=2, label='Mean')
-            plt.fill_between(frames_pulse, pulse_avg - pulse_sem, pulse_avg + pulse_sem,
+            # frames_pulse = np.arange(len(pulse_avg))
+            plt.plot(x_in_s, pulse_avg, 'k', linewidth=2, label='Mean')
+            plt.fill_between(x_in_s, pulse_avg - pulse_sem, pulse_avg + pulse_sem,
                             alpha=0.3, color='gray', label='SEM')
-            plt.plot(pulse_protocol, 'r', linewidth=1.5, label='Stimulus')
-            plt.title(f'Average pulse with SEM, {direction}({shuffle_method} Randomized)')
+            plt.plot(x_in_s, pulse_protocol, 'r', linewidth=1.5, label='Stimulus')
+            plt.title(f'Average pulse with SEM, \n {direction}({shuffle_method} Randomized)')
             plt.xlabel('Frame (relative to pulse onset)')
             plt.ylabel('dF/F')
             if direction == 'above':
@@ -615,6 +635,7 @@ class tseries:
                 plt.ylim(-10,5)
             plt.legend()
             plt.tight_layout()
+            plt.xlim(0,len_in_s)
             fig3.savefig(self.output / str(thresh) / f"{corr_method}_{shuffle_method}_{trace}_{direction}_pulse_average.png", dpi=400)
             plt.close(fig3)
 
@@ -625,47 +646,61 @@ class tseries:
         corr_method, shuffle_method, thresh, trace = args
         if corr_method == 'rand':
             return
-        fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+        fig, axes = plt.subplots(1, 3, figsize=(9,4),constrained_layout=True)
         #all corr values
-        ax2 = axes[0]
         xcorr_display = self.corr_results['corr_map'].copy()
-        im2 = ax2.imshow(xcorr_display, cmap='viridis', aspect='auto')
+        xcorr_display[~self.roi_mask] = np.nan
+        lag_display = self.corr_results['corr_map'].copy()
+        lag_display[~self.corr_results['roi_mask_refined']] = np.nan
+        all_vals = np.concatenate([xcorr_display.ravel(), lag_display.ravel()])
+        vmin = np.nanmin(all_vals)
+        vmax = np.nanmax(all_vals)
+        norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax)
+        ax2 = axes[0]
+        # xcorr_display = self.corr_results['corr_map'].copy()
+        # xcorr_display[~self.roi_mask] = np.nan
+        im2 = ax2.imshow(xcorr_display, cmap='viridis', aspect='auto', norm=norm)
         ax2.set_title(f'{corr_method} Map')
         ax2.set_xlabel('X (pixels)')
         ax2.set_ylabel('Y (pixels)')
-        cbar2 = plt.colorbar(im2, ax=ax2)
-        cbar2.set_label('Correlation')
+        # cbar2 = plt.colorbar(im2, ax=ax2)
+        # cbar2.set_label('Correlation coefficient')
         #ROI mask
         ax3 = axes[1]
-        ax3.imshow(self.corr_results['roi_mask_refined'], cmap='gray', aspect='auto')
+        im3 = ax3.imshow(self.corr_results['roi_mask_refined'], cmap='gray', aspect='auto')
         ax3.set_title(f'Selected ROI ({self.corr_results["roi_mask_refined"].sum()} pixels)')
         ax3.set_xlabel('X (pixels)')
         ax3.set_ylabel('Y (pixels)')
         #filtered corr values
         ax1 = axes[2]
-        lag_display = self.corr_results['corr_map'].copy()
-        lag_display[~self.corr_results['roi_mask_refined']] = np.nan
-        im1 = ax1.imshow(lag_display, cmap='viridis', aspect='auto')
+        # lag_display = self.corr_results['corr_map'].copy()
+        # lag_display[~self.corr_results['roi_mask_refined']] = np.nan
+        im1 = ax1.imshow(lag_display, cmap='viridis', aspect='auto', norm=norm)
         ax1.set_title(f'{corr_method} Map filtered')
         ax1.set_xlabel('X (pixels)')
         ax1.set_ylabel('Y (pixels)')
-        cbar1 = plt.colorbar(im1, ax=ax1)
-        cbar1.set_label('Corr Values')
-        plt.suptitle(f'{corr_method} Maps', fontsize=14, fontweight='bold')
-        plt.tight_layout()
+        cbar = fig.colorbar(im1, ax=axes[2])
+        cbar.set_label('Correlation coefficient')
+        # cbar1 = plt.colorbar(im1, ax=ax1)
+        # cbar1.set_label('Corr Values')
+        # fig.subplots_adjust(top=0.88)
+        fig.suptitle(f'{corr_method} Maps', fontsize=14, fontweight='bold')
+        # plt.tight_layout()
         plt.savefig(self.output / str(thresh)  / f"{corr_method}_{shuffle_method}_{trace}_{direction}_corr_maps.png", dpi=400)
+        plt.close()
         #lag if its xcorr > shows at which lag pixel has highest/ lowest xcorr
         if corr_method == 'xcorr':  
-            fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+            fig, axes = plt.subplots(1, 3, figsize=(9,4),constrained_layout=True)
             #all lag
             ax2 = axes[0]
             lag_display = self.corr_results['lag_map'].copy()
+            lag_display[~self.roi_mask] = np.nan
             im2 = ax2.imshow(lag_display, cmap='viridis', aspect='auto')
-            ax2.set_title(f'Lag Map')
+            ax2.set_title(f'Optimal Lag Map')
             ax2.set_xlabel('X (pixels)')
             ax2.set_ylabel('Y (pixels)')
-            cbar2 = plt.colorbar(im2, ax=ax2)
-            cbar2.set_label('Lag (Frames)')
+            # cbar2 = plt.colorbar(im2, ax=ax2)
+            # cbar2.set_label('Lag (Frames)')
             #ROI mask
             ax3 = axes[1]
             ax3.imshow(self.corr_results['roi_mask_refined'], cmap='gray', aspect='auto')
@@ -677,13 +712,13 @@ class tseries:
             lag_display = self.corr_results['lag_map'].copy()
             lag_display[~self.corr_results['roi_mask_refined']] = np.nan
             im1 = ax1.imshow(lag_display, cmap='viridis', aspect='auto')
-            ax1.set_title(f'Lag Map filtered')
+            ax1.set_title(f'Optimal Lag Map filtered')
             ax1.set_xlabel('X (pixels)')
             ax1.set_ylabel('Y (pixels)')
             cbar1 = plt.colorbar(im1, ax=ax1)
             cbar1.set_label('Lag (Frames)')
             plt.suptitle(f'Lag Maps', fontsize=14, fontweight='bold')
-            plt.tight_layout()
+            # plt.tight_layout()
             plt.savefig(self.output / str(thresh)  / f"{corr_method}_{shuffle_method}_{trace}_{direction}_lag_maps.png", dpi=400)
         plt.close('all')
     
@@ -691,6 +726,8 @@ def process_single_tif_task(args, tif_container, protocol, olf_stim_pulse, datas
     #in container: .median_stack_subtracted, .subtracted, .stack, .median_stack, .stack_dimension, name, .output, .file_path
     corr_method, shuffle_method, thresh, trace = args
     result = {}
+    if trace =='pulse' and shuffle_method =='time':
+        a=1
     tif_container.randomize_stack(method=shuffle_method) #added .stack_shuffled > stack if no randomizaiton selected >> use .stack_shuffled to continue
     tif_container.substack = tif_container.stack_shuffled[:, tif_container.roi_mask]
     T, H, W = tif_container.shape
@@ -814,7 +851,7 @@ def calc_condition_avg(data_dict):
                                 averaged_data[corr][shuffle][thr][tr][direction] = avg_results
     return averaged_data
 
-def plot_avg_results(args, olf_protocoll, olf_protocoll_stim):
+def plot_avg_results(args, olf_params):
     pkl_path, result_path = args
     os.makedirs(result_path, exist_ok=True)
     with open(pkl_path, 'rb') as f:
@@ -827,6 +864,8 @@ def plot_avg_results(args, olf_protocoll, olf_protocoll_stim):
                     for direction in avg_results[corr][shuffle][thresh][trace]:
                         dff = avg_results[corr][shuffle][thresh][trace][direction]['dff_mean']
                         dff_sem = avg_results[corr][shuffle][thresh][trace][direction]['dff_sem']
+                        fps = avg_results[corr][shuffle][thresh][trace][direction]['fps']
+                        olf_stim, olf_stim_pulse = make_olf_protocoll(fps, olf_params[0], olf_params[1], olf_params[2], olf_params[3], olf_params[4])
                         if is_condition:
                             n_exp = avg_results[corr][shuffle][thresh][trace][direction]["n_flies"]
                             prefix = 'flies'
@@ -834,43 +873,68 @@ def plot_avg_results(args, olf_protocoll, olf_protocoll_stim):
                             n_exp = avg_results[corr][shuffle][thresh][trace][direction]["n_tseries"]
                             prefix= "tseries"
                         if trace == 'whole':
-                            stim = olf_protocoll
+                            stim = olf_stim
                             pulse_avg = avg_results[corr][shuffle][thresh][trace][direction]['dff_all_mean']
                             pulse_sem = avg_results[corr][shuffle][thresh][trace][direction]['dff_all_sem']
+                            fps = avg_results[corr][shuffle][thresh][trace][direction]['fps']
                             frames_pulse = np.arange(len(pulse_avg))
-                            fig4 = plt.figure(figsize=(12, 4))
-                            plt.plot(pulse_avg, 'k', linewidth=1.2, label='Mean')
-                            plt.fill_between(frames_pulse, pulse_avg - pulse_sem, pulse_avg + pulse_sem,
+                            fig4, (ax_top, ax_bottom) = plt.subplots(nrows=2,ncols=1,figsize=(12, 4), gridspec_kw={'height_ratios': [1, 4]})
+                            ax_bottom.plot(pulse_avg, 'k', linewidth=1.2, label='Mean')
+                            ax_bottom.fill_between(frames_pulse, pulse_avg - pulse_sem, pulse_avg + pulse_sem,
                                         alpha=0.3,  zorder=4, color='gray', label='SEM')
-                            plt.plot(stim, 'r', linewidth=1, label='Stimulus')
-                            plt.title(f'mean across {n_exp} {prefix}, {corr}{trace}{direction}>{thresh}*std, {shuffle}-randomized')
-                            plt.xlabel('Frame (relative to pulse onset)')
-                            plt.ylabel('dF/F')
+                            ax_top.plot(stim, 'r', linewidth=1, label='Stimulus')
+                            ax_top.set_title(f'mean across {n_exp} {prefix}, \n {corr},{trace},{direction} {thresh}*std, {shuffle}-randomized')
+                            ax_bottom.set_xlabel('Seconds (relative to pulse onset)')
+                            ax_top.set_ylabel('Olfactory Stim')
+                            ax_bottom.set_ylabel('dF/F')
                             if direction == 'above':
-                                plt.ylim(-2.5,5)
+                                ax_bottom.set_ylim(-2.5,5)
                             else:
-                                plt.ylim(-5,2.5)
-                            plt.legend()
-                            plt.tight_layout()
+                                ax_bottom.set_ylim(-5,2.5)
+                            ax_top.axis('off')
+                            ax_bottom.spines['top'].set_visible(False)
+                            ax_bottom.spines['right'].set_visible(False)
+                            fig4.subplots_adjust(hspace=0.002) 
+                            handles_top,   labels_top   = ax_top.get_legend_handles_labels()
+                            handles_bottom,labels_bottom = ax_bottom.get_legend_handles_labels()
+                            handles = handles_top + handles_bottom
+                            labels  = labels_top  + labels_bottom
+                            fig4.subplots_adjust(bottom=0.2)
+                            fig4.legend(handles, labels, loc='lower center', bbox_to_anchor=(0.5, 0), ncol=3, frameon=False, fontsize='medium')
+                            frame_interval = fps *15
+                            ax_bottom.xaxis.set_major_locator(ticker.MultipleLocator(frame_interval))
+                            ax_bottom.xaxis.set_major_formatter(
+                                ticker.FuncFormatter(lambda x, pos: f'{int(x / fps)}')
+                            )
+                            ax_bottom.tick_params(axis='x', labelsize=9) 
+                            ax_bottom.set_xlim(0,)
+                            ax_top.set_xlim(0,)
                             fig4.savefig(Path(result_path / f'{prefix}_avg_ALL_{corr}_{shuffle}_{thresh}_{trace}_{direction}.png'), dpi=400)
                             plt.close(fig4)
-                        stim = olf_protocoll_stim
-                        frames = np.arange(len(dff))
+                        stim = olf_stim_pulse
                         if len(dff)>400:
                             fig2, ax = plt.subplots(figsize=(12, 4))
                         else:
                             fig2, ax = plt.subplots(figsize=(6, 6))
-                        plt.plot(dff, color='k', linewidth=1.2)
-                        plt.plot(stim, color='r',  linewidth=1, label='Stimulus')
-                        ax.fill_between(frames, dff - dff_sem, dff + dff_sem, alpha=0.3, zorder=4, color='gray', label='SEM')
-                        plt.title(f'mean across {n_exp} {prefix}, {corr}{trace}{direction}>{thresh}*std, {shuffle}-randomized')
-                        plt.xlabel('Frame (relative to pulse onset)')
+                        len_in_s = len(dff) / fps
+                        x_in_s = np.arange(0, len_in_s, 1/fps)
+                        x_in_s = x_in_s[:len(dff)]
+                        stim = stim[:len(x_in_s)]
+                        plt.plot(x_in_s, dff, color='k', linewidth=1.2, label = 'Mean')
+                        plt.plot(x_in_s, stim, color='r',  linewidth=1, label='Stimulus')
+                        ax.fill_between(x_in_s, dff - dff_sem, dff + dff_sem, alpha=0.3, zorder=4, color='gray', label='SEM')
+                        plt.title(f'mean across {n_exp} {prefix}, \n {corr},{trace},{direction} {thresh}*std, {shuffle}-randomized')
+                        plt.xlabel('Seconds (relative to pulse onset)')
                         plt.ylabel('dF/F')
                         if direction == 'above':
                             plt.ylim(-2.5,5)
                         else:
                             plt.ylim(-5,2.5)
-                        plt.tight_layout()
+                        ax.spines['top'].set_visible(False)
+                        ax.spines['right'].set_visible(False)
+                        ax.set_xlim(0,)
+                        fig2.subplots_adjust(bottom=0.15)
+                        fig2.legend(loc= 'lower center', bbox_to_anchor=(0.5, 0), ncol=3, frameon=False, fontsize='medium')
                         fig2.savefig(Path(result_path / f'{prefix}_avg_{corr}_{shuffle}_{thresh}_{trace}_{direction}.png'), dpi=400)
                         plt.close(fig2)
     plt.close("all")
@@ -1113,20 +1177,20 @@ def main():
                     pickle.dump(condition_avg_results, fo)  
              
     plotting_tasks = []
-    olf_stim, olf_stim_pulse = make_olf_protocoll(mean_fps, olf_params[0], olf_params[1], olf_params[2], olf_params[3], olf_params[4])
+    
     for condition in conditions:
         if os.path.exists(dataset_layout.processed / condition / 'condition_avg_results.pkl') and os.path.exists(dataset_layout.results / condition / f'flies_avg_{CORR_METHODS[-1]}_{SHUFFLE_METHODS[-1]}_{THRESH[-1]}_{TRACE[-1]}_above.png') == False:
             plotting_tasks.append((dataset_layout.processed / condition / 'condition_avg_results.pkl', dataset_layout.results / condition)) 
         for fly in os.listdir(dataset_layout.processed / condition):
             if os.path.exists(dataset_layout.processed / condition / fly / 'fly_avg_results.pkl') and os.path.exists(dataset_layout.results / condition / fly / f'tseries_avg_{CORR_METHODS[-1]}_{SHUFFLE_METHODS[-1]}_{THRESH[-1]}_{TRACE[-1]}_above.png') == False:
                 plotting_tasks.append((dataset_layout.processed / condition / fly / 'fly_avg_results.pkl', dataset_layout.results / condition / fly)) 
-    MAX_WORKERS = min(8, len(plotting_tasks))
-    # MAX_WORKERS = 1 #for dubugging
+    # MAX_WORKERS = min(8, len(plotting_tasks))
+    MAX_WORKERS = 1 #for dubugging
     workers_to_use = min(len(plotting_tasks), MAX_WORKERS)
     if workers_to_use > 0:
         print(f'Plotting {len(plotting_tasks)} Conditions and Flies with {workers_to_use} workers')
         with ProcessPoolExecutor(max_workers=workers_to_use) as executor:
-            future_to_neuron = {executor.submit(plot_avg_results, args, olf_stim, olf_stim_pulse): args[0] for args in plotting_tasks}
+            future_to_neuron = {executor.submit(plot_avg_results, args, olf_params): args[0] for args in plotting_tasks}
             for future in as_completed(future_to_neuron):
                 try:
                     sucess = future.result()

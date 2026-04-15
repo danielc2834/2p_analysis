@@ -23,22 +23,26 @@ dataset_layout = core_paths.dataset_layout(dataset_folder, today)
 dataset_layout.ensure_paths()
 metadata = pd.read_excel(metasheet, sheet_name = dataset_layout.name)
 #################################Globals and Parameters
-CORR_METHODS = ['xcorr', 'corr', 'rand']
-SHUFFLE_METHODS = ["none", 'phase', 'time']
-ONLY_PLOTTING = False
+# CORR_METHODS = ['xcorr', 'corr', 'rand']
+CORR_METHODS = ['xcorr']
+SHUFFLE_METHODS = ["none", 'phase'] #time
+ONLY_PLOTTING = True
 OVERWRITE_PLOTS = False
-# THRESH = [2, 3, 4, 5] #std above the mean
+# THRESH = [2, 3, 4] #std above the mean
 THRESH = [2]
-TRACE = ['whole', 'pulse']
+# THRESH = [3]
+# THRESH = [4]
+# THRESH = [5]
+# TRACE = ['whole', 'pulse']
+TRACE = ['pulse']
 OLF_PROTOCOLL_PARAMS = [5, 5, 5, 5, 20] #[Reps, Stim, Pre, Post, ISI]
-only_plotting = False
+only_plotting = True
 dataset_layout.store_globals(CORR_METHODS=CORR_METHODS, SHUFFLE_METHODS=SHUFFLE_METHODS, ONLY_PLOTTING=ONLY_PLOTTING, \
                             OVERWRITE_PLOTS=OVERWRITE_PLOTS, THRESH=THRESH, TRACE=TRACE, \
                             mean_fps=metadata.loc[:, 'fps'].mean(), OLF_PROTOCOLL_PARAMS=OLF_PROTOCOLL_PARAMS)
 #################################
 #TODO: distrplot
 #           - bin size to 1 frame
-#           - color code of scatterplot to middle and isdes same color
 #TODO: plots
 #           - 
 class tseries:
@@ -742,7 +746,7 @@ def process_single_tif_task(args, tif_container, protocol, olf_stim_pulse, datas
     dataset_layout.olf_stim_pulse = olf_stim_pulse
     # tif_container.select_region() #added .roi_mask_skipp, .substack, .roi_mask
     for direciton in ['above', 'below']:
-        tif_container.corr_pixels(dataset_layout, method=corr_method, direction=direciton, thresh=thresh, trace=trace, max_lag=1*tif_container.fps)
+        tif_container.corr_pixels(dataset_layout, method=corr_method, direction=direciton, thresh=thresh, trace=trace, max_lag=2.5*tif_container.fps)
         #added .corr_results
         #corr results keys: roi_trace, roi_mask_refined, corr_map, lag_map, corr_values_fitlered, corr_values_all, lag_corr_dict
         tif_container.calculate_dff(dataset_layout) #added .dff_results 
@@ -751,7 +755,7 @@ def process_single_tif_task(args, tif_container, protocol, olf_stim_pulse, datas
         #plots in: dataset / 4_results / condition / fly / tseries /
         tif_container.plot_single_tif_maps(direciton, args)
         result[direciton] = {'corr_results': tif_container.corr_results, 
-                             'dff_results': tif_container.dff_results}
+                            'dff_results': tif_container.dff_results}
     return result, args
 
 def make_olf_protocoll(fps, reps, width, pre, post, isi):
@@ -857,6 +861,7 @@ def plot_avg_results(args, olf_params):
     with open(pkl_path, 'rb') as f:
         avg_results = pickle.load(f)
     is_condition = 'condition_avg' in str(pkl_path)
+    is_ba = 'BA' in str(pkl_path)
     for corr in avg_results:
         for shuffle in avg_results[corr]:
             for thresh in avg_results[corr][shuffle]:
@@ -887,10 +892,10 @@ def plot_avg_results(args, olf_params):
                             ax_bottom.set_xlabel('Seconds (relative to pulse onset)')
                             ax_top.set_ylabel('Olfactory Stim')
                             ax_bottom.set_ylabel('dF/F')
-                            if direction == 'above':
-                                ax_bottom.set_ylim(-2.5,5)
-                            else:
-                                ax_bottom.set_ylim(-5,2.5)
+                            # if direction == 'above':
+                            #     ax_bottom.set_ylim(-2.5,5)
+                            # else:
+                            #     ax_bottom.set_ylim(-5,2.5)
                             ax_top.axis('off')
                             ax_bottom.spines['top'].set_visible(False)
                             ax_bottom.spines['right'].set_visible(False)
@@ -921,15 +926,22 @@ def plot_avg_results(args, olf_params):
                         x_in_s = x_in_s[:len(dff)]
                         stim = stim[:len(x_in_s)]
                         plt.plot(x_in_s, dff, color='k', linewidth=1.2, label = 'Mean')
-                        plt.plot(x_in_s, stim, color='r',  linewidth=1, label='Stimulus')
                         ax.fill_between(x_in_s, dff - dff_sem, dff + dff_sem, alpha=0.3, zorder=4, color='gray', label='SEM')
+                        x_in_s = x_in_s[:len(stim)]
+                        plt.plot(x_in_s, stim, color='r',  linewidth=1, label='Stimulus')
                         plt.title(f'mean across {n_exp} {prefix}, \n {corr},{trace},{direction} {thresh}*std, {shuffle}-randomized')
                         plt.xlabel('Seconds (relative to pulse onset)')
                         plt.ylabel('dF/F')
-                        if direction == 'above':
-                            plt.ylim(-2.5,5)
+                        if is_ba == True:
+                            # if direction == 'above':
+                                plt.ylim(-2.5,10.5)
+                            # else:
+                            #     plt.ylim(-5,2.5)
                         else:
-                            plt.ylim(-5,2.5)
+                            # if direction == 'above':
+                                plt.ylim(-2.5,6.5)
+                            # else:
+                            #     plt.ylim(-5,2.5)
                         ax.spines['top'].set_visible(False)
                         ax.spines['right'].set_visible(False)
                         ax.set_xlim(0,)
@@ -1076,7 +1088,7 @@ def main():
         for condition in conditions:
             lag_across_flies = []
             #TODO: CURRENTLY SKIPPING TOM RECS
-            if condition.endswith("_nan"):
+            if condition.endswith("_nan")  or condition.split('_')[2] != 'Wax':#or condition.endswith("Wax_BA")
                 continue
             if os.path.isdir(dataset_layout.processed / condition):
                 print(f'Processing  {condition}')
@@ -1175,17 +1187,16 @@ def main():
                 # plot_condition_results(condition_avg_results, dataset_layout) 
                 with open(dataset_layout.processed / condition / 'condition_avg_results.pkl', "wb") as fo:
                     pickle.dump(condition_avg_results, fo)  
-             
     plotting_tasks = []
     
     for condition in conditions:
-        if os.path.exists(dataset_layout.processed / condition / 'condition_avg_results.pkl') and os.path.exists(dataset_layout.results / condition / f'flies_avg_{CORR_METHODS[-1]}_{SHUFFLE_METHODS[-1]}_{THRESH[-1]}_{TRACE[-1]}_above.png') == False:
+        if os.path.exists(dataset_layout.processed / condition / 'condition_avg_results.pkl'):# and os.path.exists(dataset_layout.results / condition / f'flies_avg_{CORR_METHODS[-1]}_{SHUFFLE_METHODS[-1]}_{THRESH[-1]}_{TRACE[-1]}_above.png') == False:
             plotting_tasks.append((dataset_layout.processed / condition / 'condition_avg_results.pkl', dataset_layout.results / condition)) 
         for fly in os.listdir(dataset_layout.processed / condition):
             if os.path.exists(dataset_layout.processed / condition / fly / 'fly_avg_results.pkl') and os.path.exists(dataset_layout.results / condition / fly / f'tseries_avg_{CORR_METHODS[-1]}_{SHUFFLE_METHODS[-1]}_{THRESH[-1]}_{TRACE[-1]}_above.png') == False:
                 plotting_tasks.append((dataset_layout.processed / condition / fly / 'fly_avg_results.pkl', dataset_layout.results / condition / fly)) 
-    # MAX_WORKERS = min(8, len(plotting_tasks))
-    MAX_WORKERS = 1 #for dubugging
+    MAX_WORKERS = min(8, len(plotting_tasks))
+    # MAX_WORKERS = 1 #for dubugging
     workers_to_use = min(len(plotting_tasks), MAX_WORKERS)
     if workers_to_use > 0:
         print(f'Plotting {len(plotting_tasks)} Conditions and Flies with {workers_to_use} workers')

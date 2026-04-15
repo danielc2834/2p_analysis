@@ -33,8 +33,8 @@ olfactory_stimuli = {'pulse' : [5,5,5,20,5], 'on' : 341} #for step: [pre,stim,po
 ################################################ DATA POOLING ################################################
 # condition_columns = ['visual_stim', 'genotype'] #columns used in metadatasheet to make different conditions 
 # condition_columns = ['visual_stim', 'LED', "region", 'Retinal'] #tdc act
-condition_columns = ['region', 'olf_stim'] #OA in OL
-# condition_columns = ['genotype', 'visual_stim'] #degen var
+# condition_columns = ['region', 'olf_stim'] #OA in OL
+condition_columns = ['genotype', 'visual_stim'] #degen var
 
 ################################################ DOCUMENTATION ################################################
 #bleedtrough_correction >> whether bleadtrough (from visual stimulus) will be corrected while correcting the recordings for motion, boolean, default=True

@@ -1,20 +1,3 @@
-# import numpy as np
-# import matplotlib.pyplot as plt
-# value = [0,0,1,0,0.5,0.5,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0.5,0.53125,0.4375,0.59375,0.375,0.65625,0.3125,0.71875,0.25,0.78125,0.1875,0.84375,0.125,0.90625,0.0625,0.96875,0,0.5,0.6,0.7,0.8,0.9,1,0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,0,0.1,0.2,0.3,0.4,0.5,0] 
-# duraiton =  [4,2,3,3,2,0.243,0.449,0.406,0.372,0.343,0.317,0.296,0.277,0.26,0.246,0.232,0.221,0.21,0.2,0.192,0.183,0.176,0.169,0.163,0.157,0.151,0.146,0.142,0.137,0.133,0.129,0.125,0.122,0.118,0.115,0.112,0.11,0.107,0.104,0.102,0.099,0.097,0.095,0.093,0.091,0.09,0.087,0.086,0.084,0.082,0.081,0.079,0.078,0.077,0.075,0.074,0.073,0.072,0.07,0.069,0.068,0.068,0.066,0.065,0.064,0.063,0.062,0.062,0.06,0.06,0.059,0.058,0.058,0.056,0.056,0.055,0.055,0.054,0.053,0.052,0.052,0.052,0.05,2,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,2,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,2,2]
-# print(len(value))
-# print(len(duraiton))
-# protocoll=[]
-# fps=mean_fps
-# for val, dur in zip(value, duraiton):
-#     frames= fps*dur
-#     list =[val]*round(frames)
-#     # values = np.array([])
-#     protocoll.extend(list)
-# time=np.arange(0,len(protocoll), 1)
-# plt.plot(time, protocoll)
-# plt.show()
-
 import pandas as pd
 import pickle
 import numpy as np
@@ -22,6 +5,14 @@ import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 from collections import defaultdict
 import os
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+import umap
+import hdbscan
+import warnings
+warnings.filterwarnings('ignore')
 
 def create_stimulus_protocol(mean_fps):
     """
@@ -646,161 +637,6 @@ def analyze_contrast_response(fly_segments, mean_fps, output_dir):
     
     return results
 
-# def analyze_frequency_response(fly_segments, mean_fps, output_dir):
-#     """
-#     Analyze frequency responses by extracting maximum amplitude for each temporal frequency.
-    
-#     Parameters:
-#     -----------
-#     fly_segments : dict
-#         Segmented traces organized by fly
-#     mean_fps : float
-#         Frames per second
-#     output_dir : str
-#         Directory to save plots
-    
-#     Returns:
-#     --------
-#     dict
-#         Frequency analysis results
-#     """
-#     print("\n" + "="*60)
-#     print("Analyzing frequency responses...")
-    
-#     # Frequency stimulus: series of flashes at different temporal frequencies
-#     # The flashes alternate between values (e.g., 0.5 and 1) at different rates
-#     # Based on the stimulus protocol, the frequency section contains flashes
-#     # Duration pattern suggests frequencies increase (durations decrease)
-    
-#     # Define frequency bins based on flash durations
-#     # Each pair of durations represents one cycle (ON + OFF)
-#     flash_durations = [0.243, 0.449, 0.406, 0.372, 0.343, 0.317, 0.296, 0.277, 0.26, 0.246, 
-#                       0.232, 0.221, 0.21, 0.2, 0.192, 0.183, 0.176, 0.169, 0.163, 0.157, 
-#                       0.151, 0.146, 0.142, 0.137, 0.133, 0.129, 0.125, 0.122, 0.118, 0.115, 
-#                       0.112, 0.11, 0.107, 0.104, 0.102, 0.099, 0.097, 0.095, 0.093, 0.091, 
-#                       0.09, 0.087, 0.086, 0.084, 0.082, 0.081, 0.079, 0.078, 0.077, 0.075, 
-#                       0.074, 0.073, 0.072, 0.07, 0.069, 0.068, 0.068, 0.066, 0.065, 0.064, 
-#                       0.063, 0.062, 0.062, 0.06, 0.06, 0.059, 0.058, 0.058, 0.056, 0.056, 
-#                       0.055, 0.055, 0.054, 0.053, 0.052, 0.052, 0.052, 0.05]
-    
-#     # Calculate frequencies (Hz) - each duration is half a cycle
-#     frequencies = [1.0 / (2 * dur) for dur in flash_durations]
-    
-#     # Define frequency bins (1 to 10 Hz in 0.1 Hz steps)
-#     freq_bins = np.arange(1.0, 10.1, 0.1)
-    
-#     def bin_frequency(freq):
-#         """Bin frequency to nearest 0.1 Hz step between 1-10 Hz"""
-#         if freq < 1.0:
-#             return 1.0
-#         elif freq > 10.0:
-#             return 10.0
-#         else:
-#             return round(freq * 10) / 10
-    
-#     # Storage for results
-#     fly_freq_responses = defaultdict(lambda: defaultdict(list))  # fly_id -> binned_frequency -> [responses]
-    
-#     # Process each fly's frequency traces
-#     for fly_id, traces_and_times in fly_segments['frequency'].items():
-#         print(f"\n  Processing FlyID: {fly_id}")
-        
-#         for trace, time in traces_and_times:
-#             # Use first 0.5s as baseline
-#             baseline_frames = int(0.5 * mean_fps)
-#             if baseline_frames >= len(trace):
-#                 continue
-#             baseline = np.mean(trace[:baseline_frames])
-            
-#             # Extract maximum response for each frequency flash
-#             current_idx = baseline_frames
-#             for freq, duration in zip(frequencies, flash_durations):
-#                 n_frames = int(duration * mean_fps)
-#                 if n_frames == 0:
-#                     n_frames = 1  # Ensure at least 1 frame
-                    
-#                 if current_idx + n_frames <= len(trace):
-#                     segment = trace[current_idx:current_idx + n_frames]
-                    
-#                     # Check if segment is not empty
-#                     if len(segment) > 0:
-#                         # Calculate maximum amplitude (delta from baseline)
-#                         max_amplitude = np.max(segment - baseline)
-                        
-#                         # Bin the frequency
-#                         binned_freq = bin_frequency(freq)
-#                         fly_freq_responses[fly_id][binned_freq].append(max_amplitude)
-                    
-#                     current_idx += n_frames
-#                 else:
-#                     break  # Stop if we run out of trace
-    
-#     # Average across presentations for each fly
-#     fly_avg_responses = {}  # fly_id -> {binned_frequency: mean_amplitude}
-#     for fly_id in fly_freq_responses.keys():
-#         fly_avg_responses[fly_id] = {}
-#         for freq in fly_freq_responses[fly_id].keys():
-#             if len(fly_freq_responses[fly_id][freq]) > 0:
-#                 fly_avg_responses[fly_id][freq] = np.mean(fly_freq_responses[fly_id][freq])
-    
-#     # Get unique binned frequencies
-#     all_freqs = []
-#     for fly_data in fly_avg_responses.values():
-#         all_freqs.extend(fly_data.keys())
-#     unique_freqs = sorted(list(set(all_freqs)))
-    
-#     # Calculate overall average across flies
-#     overall_responses = {}  # binned_frequency -> [mean_responses_per_fly]
-#     for freq in unique_freqs:
-#         overall_responses[freq] = [fly_avg_responses[fly][freq]
-#                                    for fly in fly_avg_responses.keys()
-#                                    if freq in fly_avg_responses[fly]]
-    
-#     # Calculate mean and SEM for each frequency
-#     overall_mean = {}
-#     overall_sem = {}
-#     for freq, resps in overall_responses.items():
-#         if len(resps) > 0:
-#             overall_mean[freq] = np.mean(resps)
-#             overall_sem[freq] = np.std(resps) / np.sqrt(len(resps))
-    
-#     # Create plot
-#     fig, ax = plt.subplots(figsize=(12, 6))
-    
-#     x_vals = sorted(overall_mean.keys())
-#     y_vals = [overall_mean[x] for x in x_vals]
-#     y_sem = [overall_sem[x] for x in x_vals]
-    
-#     ax.errorbar(x_vals, y_vals, yerr=y_sem, fmt='o', color='black',
-#                 markersize=6, capsize=4, linewidth=2, label='Mean ± SEM')
-#     ax.plot(x_vals, y_vals, '-', color='gray', alpha=0.5, linewidth=1)
-    
-#     ax.set_xlabel('Temporal Frequency (Hz)', fontsize=12)
-#     ax.set_ylabel('Maximum Response (ΔF/F)', fontsize=12)
-#     ax.set_title('Frequency Response Curve', fontsize=14, fontweight='bold')
-#     ax.grid(True, alpha=0.3)
-#     ax.axhline(y=0, color='black', linestyle='--', linewidth=1, alpha=0.5)
-#     ax.legend()
-    
-#     plt.tight_layout()
-#     plt.savefig(os.path.join(output_dir, '9_frequency_analysis.png'),
-#                 dpi=150, bbox_inches='tight')
-#     plt.close()
-    
-#     if len(x_vals) > 0:
-#         print(f"\n  Frequency range: {min(x_vals):.2f} Hz to {max(x_vals):.2f} Hz")
-#     print(f"  Number of flies: {len(fly_avg_responses)}")
-#     print(f"  Number of frequency bins: {len(unique_freqs)}")
-    
-#     results = {
-#         'fly_responses': fly_avg_responses,
-#         'overall_mean': overall_mean,
-#         'overall_sem': overall_sem,
-#         'frequencies': unique_freqs
-#     }
-    
-#     return results
-
 def analyze_frequency_response(fly_segments, mean_fps, output_dir):
     """
     Analyze frequency responses by extracting maximum amplitude for each temporal frequency.
@@ -1245,6 +1081,486 @@ def analyze_across_fly_variability(fly_segments, mean_fps, output_dir):
     
     return results
 
+def extract_roi_features(trace, time, segments, mean_fps,
+                         polarity_results=None, luminance_results=None,
+                         contrast_results=None, frequency_results=None):
+    """
+    Extract a feature vector from a single ROI trace.
+
+    Returns
+    -------
+    numpy.array  (1-D, length = n_features)
+    list         feature names (same order)
+    """
+    features = []
+    names = []
+
+    seg_names = ['polarity', 'frequency', 'contrast', 'luminance']
+
+    for seg_name, (t_start, t_end) in segments.items():
+        i0 = int(t_start * mean_fps)
+        i1 = int(t_end   * mean_fps)
+        i1 = min(i1, len(trace))
+        seg = trace[i0:i1]
+        if len(seg) == 0:
+            seg = np.array([0.0])
+
+        # baseline: first 0.5 s of segment
+        bl_frames = max(1, int(0.5 * mean_fps))
+        baseline  = np.mean(seg[:bl_frames])
+        delta     = seg - baseline
+
+        # peak ΔF/F
+        peak = float(np.max(delta))
+        features.append(peak);  names.append(f'{seg_name}_peak')
+
+        # trough ΔF/F
+        trough = float(np.min(delta))
+        features.append(trough); names.append(f'{seg_name}_trough')
+
+        # AUC (trapezoid, absolute)
+        auc = float(np.trapz(np.abs(delta)))
+        features.append(auc);   names.append(f'{seg_name}_auc')
+
+        # Peak latency (frames → seconds)
+        peak_lat = float(np.argmax(delta)) / mean_fps
+        features.append(peak_lat); names.append(f'{seg_name}_peak_lat')
+
+        # Rise time: frames from 10 % to 90 % of peak (only if peak > 0)
+        if peak > 0:
+            thresh10 = 0.10 * peak
+            thresh90 = 0.90 * peak
+            above10  = np.where(delta >= thresh10)[0]
+            above90  = np.where(delta >= thresh90)[0]
+            if len(above10) > 0 and len(above90) > 0:
+                rise = (above90[0] - above10[0]) / mean_fps
+            else:
+                rise = 0.0
+        else:
+            rise = 0.0
+        features.append(rise); names.append(f'{seg_name}_rise')
+
+    # --- scalar metrics from already-computed analyses (optional) ---
+    # ON amplitude
+    on_amp  = np.nan
+    off_amp = np.nan
+    if polarity_results is not None:
+        on_amp  = polarity_results.get('overall_on_mean',  np.nan)
+        off_amp = polarity_results.get('overall_off_mean', np.nan)
+    features.append(float(on_amp)  if np.isfinite(on_amp)  else 0.0); names.append('on_amplitude')
+    features.append(float(off_amp) if np.isfinite(off_amp) else 0.0); names.append('off_amplitude')
+
+    # Luminance slope
+    lum_slope = np.nan
+    if luminance_results is not None:
+        lum_slope = luminance_results.get('mean_slope', np.nan)
+    features.append(float(lum_slope) if np.isfinite(lum_slope) else 0.0); names.append('lum_slope')
+
+    return np.array(features, dtype=float), names
+
+
+def prepare_clustering_data(roi_list, feature_set, segments, mean_fps,
+                             polarity_results=None, luminance_results=None,
+                             contrast_results=None, frequency_results=None):
+    """
+    Build data matrix X for clustering.
+
+    Parameters
+    ----------
+    roi_list : list of (trace, fly_id, tseries_key)
+    feature_set : 'full' | 'segment_<name>' | 'features'
+        'full'            -> raw full trace vector (aligned to min length)
+        'segment_polarity' etc. -> raw segment trace vector
+        'features'        -> extracted scalar feature vector
+
+    Returns
+    -------
+    X          : (n_rois, n_features) float array
+    fly_labels : list of fly_id strings (length n_rois)
+    traces     : list of raw full traces (for plotting)
+    times      : list of time vectors
+    valid_idx  : indices into roi_list that survived (non-empty rows)
+    """
+    traces_out  = []
+    fly_labels  = []
+    tseries_labels = []
+    X_rows      = []
+    valid_idx   = []
+
+    seg_names = list(segments.keys())
+
+    if feature_set == 'full':
+        # align all traces to minimum length
+        all_traces = [r[0] for r in roi_list]
+        min_len    = min(len(t) for t in all_traces)
+        for i, (trace, fly_id, ts_key) in enumerate(roi_list):
+            row = trace[:min_len].astype(float)
+            if not np.all(np.isfinite(row)):
+                continue
+            X_rows.append(row)
+            traces_out.append(trace)
+            fly_labels.append(fly_id)
+            tseries_labels.append(ts_key)
+            valid_idx.append(i)
+
+    elif feature_set.startswith('segment_'):
+        seg_name = feature_set.split('_', 1)[1]
+        t_start, t_end = segments[seg_name]
+        i0 = int(t_start * mean_fps)
+        i1 = int(t_end   * mean_fps)
+        segs = []
+        for trace, fly_id, ts_key in roi_list:
+            s = trace[i0:min(i1, len(trace))]
+            segs.append(s)
+        min_len = min(len(s) for s in segs)
+        for i, (s, (trace, fly_id, ts_key)) in enumerate(zip(segs, roi_list)):
+            row = s[:min_len].astype(float)
+            if not np.all(np.isfinite(row)):
+                continue
+            X_rows.append(row)
+            traces_out.append(trace)
+            fly_labels.append(fly_id)
+            tseries_labels.append(ts_key)
+            valid_idx.append(i)
+
+    elif feature_set == 'features':
+        for i, (trace, fly_id, ts_key) in enumerate(roi_list):
+            row, _ = extract_roi_features(
+                trace, None, segments, mean_fps,
+                polarity_results, luminance_results, contrast_results, frequency_results)
+            if not np.all(np.isfinite(row)):
+                continue
+            X_rows.append(row)
+            traces_out.append(trace)
+            fly_labels.append(fly_id)
+            tseries_labels.append(ts_key)
+            valid_idx.append(i)
+
+    if len(X_rows) == 0:
+        return None, None, None, None, None
+
+    X = np.vstack(X_rows)
+    return X, fly_labels, tseries_labels, traces_out, valid_idx
+
+
+def run_umap_hdbscan(X, min_cluster_size=10, n_neighbors=15, min_dist=0.1):
+    """UMAP embedding → HDBSCAN clustering."""
+    reducer   = umap.UMAP(n_components=2, n_neighbors=n_neighbors,
+                          min_dist=min_dist, random_state=42)
+    embedding = reducer.fit_transform(X)
+    clusterer = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size,
+                                 prediction_data=True)
+    labels    = clusterer.fit_predict(embedding)
+    return embedding, labels
+
+
+def run_umap_kmeans(X, k_range=range(2, 9), n_neighbors=15, min_dist=0.1):
+    """UMAP embedding → k-means sweep, return embedding + best labels + diagnostics."""
+    reducer   = umap.UMAP(n_components=2, n_neighbors=n_neighbors,
+                          min_dist=min_dist, random_state=42)
+    embedding = reducer.fit_transform(X)
+
+    inertias    = []
+    sil_scores  = []
+    all_labels  = {}
+
+    for k in k_range:
+        if k >= len(X):
+            break
+        km     = KMeans(n_clusters=k, random_state=42, n_init=10)
+        lbls   = km.fit_predict(X)          # cluster in original space
+        inertias.append(km.inertia_)
+        try:
+            sil = silhouette_score(X, lbls)
+        except Exception:
+            sil = 0.0
+        sil_scores.append(sil)
+        all_labels[k] = lbls
+
+    diagnostics = {'k_range': list(k_range)[:len(inertias)],
+                   'inertias': inertias,
+                   'silhouette': sil_scores,
+                   'all_labels': all_labels}
+
+    best_k    = diagnostics['k_range'][int(np.argmax(sil_scores))] if sil_scores else 2
+    best_lbls = all_labels.get(best_k, np.zeros(len(X), dtype=int))
+    return embedding, best_lbls, best_k, diagnostics
+
+
+def run_pca_kmeans(X, k_range=range(2, 9)):
+    """PCA embedding → k-means sweep (for per-fly scope)."""
+    n_comp  = min(2, X.shape[0] - 1, X.shape[1])
+    pca     = PCA(n_components=n_comp)
+    embedding = pca.fit_transform(X)
+
+    inertias   = []
+    sil_scores = []
+    all_labels = {}
+
+    for k in k_range:
+        if k >= len(X):
+            break
+        km   = KMeans(n_clusters=k, random_state=42, n_init=10)
+        lbls = km.fit_predict(X)
+        inertias.append(km.inertia_)
+        try:
+            sil = silhouette_score(X, lbls)
+        except Exception:
+            sil = 0.0
+        sil_scores.append(sil)
+        all_labels[k] = lbls
+
+    diagnostics = {'k_range': list(k_range)[:len(inertias)],
+                   'inertias': inertias,
+                   'silhouette': sil_scores,
+                   'all_labels': all_labels}
+
+    best_k    = diagnostics['k_range'][int(np.argmax(sil_scores))] if sil_scores else 2
+    best_lbls = all_labels.get(best_k, np.zeros(len(X), dtype=int))
+    return embedding, best_lbls, best_k, diagnostics
+
+
+def plot_cluster_diagnostics(diagnostics, title, save_path):
+    """Silhouette score and elbow (inertia) plots."""
+    k_range  = diagnostics['k_range']
+    if len(k_range) == 0:
+        return
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+    ax1.plot(k_range, diagnostics['silhouette'], 'o-', color='steelblue', linewidth=2)
+    best_idx = int(np.argmax(diagnostics['silhouette']))
+    ax1.axvline(k_range[best_idx], color='red', linestyle='--',
+                label=f'Best k={k_range[best_idx]}')
+    ax1.set_xlabel('Number of clusters (k)', fontsize=12)
+    ax1.set_ylabel('Silhouette score', fontsize=12)
+    ax1.set_title('Silhouette Diagnostics', fontsize=13, fontweight='bold')
+    ax1.legend(); ax1.grid(True, alpha=0.3)
+
+    ax2.plot(k_range, diagnostics['inertias'], 'o-', color='coral', linewidth=2)
+    ax2.set_xlabel('Number of clusters (k)', fontsize=12)
+    ax2.set_ylabel('Inertia', fontsize=12)
+    ax2.set_title('Elbow Curve', fontsize=13, fontweight='bold')
+    ax2.grid(True, alpha=0.3)
+
+    fig.suptitle(title, fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close()
+
+
+def plot_embedding_scatter(embedding, labels, title, save_path,
+                           hue_labels=None, hue_title='Fly'):
+    """
+    2-D scatter of UMAP / PCA embedding.
+    If hue_labels supplied, color by those instead of cluster labels.
+    """
+    fig, axes = plt.subplots(1, 2 if hue_labels is not None else 1,
+                             figsize=(14 if hue_labels is not None else 7, 6))
+    if hue_labels is None:
+        axes = [axes]
+
+    unique_clusters = sorted(set(labels))
+    cmap = plt.cm.tab10
+    colors_cluster = {c: cmap(i % 10) for i, c in enumerate(unique_clusters)}
+
+    ax = axes[0]
+    for c in unique_clusters:
+        mask = np.array(labels) == c
+        lbl  = f'Cluster {c}' if c != -1 else 'Noise'
+        ax.scatter(embedding[mask, 0], embedding[mask, 1],
+                   color=colors_cluster[c], s=20, alpha=0.7, label=lbl)
+    ax.set_title(f'{title}\n(colored by cluster)', fontsize=12, fontweight='bold')
+    ax.set_xlabel('Dim 1'); ax.set_ylabel('Dim 2')
+    ax.legend(markerscale=2, fontsize=8); ax.grid(True, alpha=0.2)
+
+    if hue_labels is not None:
+        ax2 = axes[1]
+        unique_hues = sorted(set(hue_labels))
+        colors_hue  = {h: cmap(i % 10) for i, h in enumerate(unique_hues)}
+        for h in unique_hues:
+            mask = np.array(hue_labels) == h
+            ax2.scatter(embedding[mask, 0], embedding[mask, 1],
+                        color=colors_hue[h], s=20, alpha=0.7, label=str(h))
+        ax2.set_title(f'{title}\n(colored by {hue_title})', fontsize=12, fontweight='bold')
+        ax2.set_xlabel('Dim 1'); ax2.set_ylabel('Dim 2')
+        ax2.legend(markerscale=2, fontsize=8, title=hue_title); ax2.grid(True, alpha=0.2)
+
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close()
+
+
+def plot_cluster_traces(traces, labels, mean_fps, stim_protocol, stim_time,
+                        title, save_path):
+    """
+    For each cluster: plot faint individual traces + mean ± SEM, stimulus on top.
+    """
+    unique_clusters = sorted(set(labels))
+    # exclude noise label -1 for hdbscan
+    plot_clusters = [c for c in unique_clusters if c != -1]
+    if len(plot_clusters) == 0:
+        return
+
+    # align traces to min length
+    min_len = min(len(t) for t in traces)
+    time    = np.arange(min_len) / mean_fps
+
+    n_clusters = len(plot_clusters)
+    fig = plt.figure(figsize=(6 * n_clusters, 8))
+    outer_gs = fig.add_gridspec(1, n_clusters, hspace=0.3, wspace=0.35)
+
+    cmap = plt.cm.tab10
+    colors = {c: cmap(i % 10) for i, c in enumerate(plot_clusters)}
+
+    max_stim_time = stim_time[-1]
+
+    for col_idx, cluster_id in enumerate(plot_clusters):
+        mask   = np.array(labels) == cluster_id
+        c_traces = [traces[i][:min_len] for i in range(len(traces)) if mask[i]]
+        n_rois   = len(c_traces)
+
+        inner_gs = outer_gs[col_idx].subgridspec(2, 1, height_ratios=[1, 4], hspace=0.05)
+
+        # Stimulus
+        ax_stim = fig.add_subplot(inner_gs[0])
+        ax_stim.fill_between(stim_time, 0, stim_protocol,
+                             color='lightblue', alpha=0.7, linewidth=0)
+        ax_stim.plot(stim_time, stim_protocol, color='blue', linewidth=1.2)
+        ax_stim.set_xlim(0, max(time[-1], max_stim_time))
+        ax_stim.set_ylim(-0.1, 1.1); ax_stim.axis('off')
+        lbl_str = f'Cluster {cluster_id}' if cluster_id != -1 else 'Noise'
+        ax_stim.set_title(f'{lbl_str}  (n={n_rois})', fontsize=12, fontweight='bold')
+
+        # Traces
+        ax_trace = fig.add_subplot(inner_gs[1])
+        for t in c_traces:
+            ax_trace.plot(time, t, color='gray', alpha=0.25, linewidth=0.5)
+
+        if n_rois > 0:
+            mat  = np.vstack(c_traces)
+            mean = np.mean(mat, axis=0)
+            sem  = np.std(mat,  axis=0) / np.sqrt(n_rois)
+            ax_trace.plot(time, mean, color=colors[cluster_id], linewidth=2)
+            ax_trace.fill_between(time, mean - sem, mean + sem,
+                                  color=colors[cluster_id], alpha=0.3)
+
+        ax_trace.set_xlabel('Time (s)', fontsize=10)
+        ax_trace.set_ylabel('ΔF/F', fontsize=10)
+        ax_trace.set_xlim(0, max(time[-1], max_stim_time))
+        ax_trace.grid(True, alpha=0.3)
+        ax_trace.axhline(y=0, color='black', linestyle='--', linewidth=0.8, alpha=0.5)
+
+    fig.suptitle(title, fontsize=13, fontweight='bold', y=1.01)
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close()
+
+
+def analyze_response_clustering(condition_rois, fly_rois, segments, mean_fps,
+                                 stim_protocol, stim_time, output_dir,
+                                 polarity_results=None, luminance_results=None,
+                                 contrast_results=None, frequency_results=None):
+    """
+    Orchestrate all three clustering scopes × three feature sets.
+
+    Parameters
+    ----------
+    condition_rois : list of (trace, fly_id, tseries_key)
+        All ROIs for this condition.
+    fly_rois : dict  fly_id -> list of (trace, fly_id, tseries_key)
+        ROIs grouped by fly.
+    """
+    print("\n" + "="*60)
+    print("Running response profile clustering...")
+
+    seg_names    = list(segments.keys())
+    feature_sets = ['full'] + [f'segment_{s}' for s in seg_names] + ['features']
+    k_range      = range(2, 9)
+
+    # ------------------------------------------------------------------ #
+    # SCOPE 1 & 3: per-condition (UMAP)  +  shared space colored by fly   #
+    # ------------------------------------------------------------------ #
+    print("\n  Scope: per-condition (UMAP + HDBSCAN + k-means)")
+    for fset in feature_sets:
+        print(f"    Feature set: {fset}")
+        X, fly_lbls, ts_lbls, traces, _ = prepare_clustering_data(
+            condition_rois, fset, segments, mean_fps,
+            polarity_results, luminance_results, contrast_results, frequency_results)
+
+        if X is None or len(X) < 10:
+            print(f"      Skipping {fset}: insufficient data ({0 if X is None else len(X)} ROIs)")
+            continue
+
+        # --- k-means diagnostics & best labels ---
+        emb_km, best_labels_km, best_k, diag = run_umap_kmeans(X, k_range)
+
+        plot_cluster_diagnostics(
+            diag,
+            title=f'Condition | {fset} | k-means diagnostics',
+            save_path=os.path.join(output_dir, f'clustering_diag_condition_{fset}.png'))
+
+        plot_embedding_scatter(
+            emb_km, best_labels_km,
+            title=f'Condition | {fset} | k-means (k={best_k})',
+            save_path=os.path.join(output_dir, f'clustering_umap_condition_{fset}_kmeans.png'),
+            hue_labels=fly_lbls, hue_title='Fly')
+
+        plot_cluster_traces(
+            traces, best_labels_km, mean_fps, stim_protocol, stim_time,
+            title=f'Condition | {fset} | k-means (k={best_k})',
+            save_path=os.path.join(output_dir, f'clustering_traces_condition_{fset}_kmeans.png'))
+
+        # --- HDBSCAN ---
+        emb_hdb, labels_hdb = run_umap_hdbscan(X)
+
+        plot_embedding_scatter(
+            emb_hdb, labels_hdb,
+            title=f'Condition | {fset} | HDBSCAN',
+            save_path=os.path.join(output_dir, f'clustering_umap_condition_{fset}_hdbscan.png'),
+            hue_labels=fly_lbls, hue_title='Fly')
+
+        plot_cluster_traces(
+            traces, labels_hdb, mean_fps, stim_protocol, stim_time,
+            title=f'Condition | {fset} | HDBSCAN',
+            save_path=os.path.join(output_dir, f'clustering_traces_condition_{fset}_hdbscan.png'))
+
+    # ------------------------------------------------------------------ #
+    # SCOPE 2: per-fly independent (PCA + k-means)                        #
+    # ------------------------------------------------------------------ #
+    print("\n  Scope: per-fly (PCA + k-means)")
+    for fly_id, roi_list in fly_rois.items():
+        print(f"    Fly: {fly_id}  ({len(roi_list)} ROIs)")
+        for fset in feature_sets:
+            X, fly_lbls_f, ts_lbls_f, traces_f, _ = prepare_clustering_data(
+                roi_list, fset, segments, mean_fps,
+                polarity_results, luminance_results, contrast_results, frequency_results)
+
+            if X is None or len(X) < 4:
+                continue
+
+            emb, best_labels, best_k, diag = run_pca_kmeans(X, k_range)
+
+            plot_cluster_diagnostics(
+                diag,
+                title=f'Fly {fly_id} | {fset} | k-means diagnostics',
+                save_path=os.path.join(output_dir,
+                    f'clustering_diag_fly{fly_id}_{fset}.png'))
+
+            plot_embedding_scatter(
+                emb, best_labels,
+                title=f'Fly {fly_id} | {fset} | k-means (k={best_k})',
+                save_path=os.path.join(output_dir,
+                    f'clustering_pca_fly{fly_id}_{fset}_kmeans.png'))
+
+            plot_cluster_traces(
+                traces_f, best_labels, mean_fps, stim_protocol, stim_time,
+                title=f'Fly {fly_id} | {fset} | k-means (k={best_k})',
+                save_path=os.path.join(output_dir,
+                    f'clustering_traces_fly{fly_id}_{fset}_kmeans.png'))
+
+    print("\n  Clustering analysis complete.")
+
+
 def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=None, output_dir='output_plots'):
     """
     Process PKL file with fluorescence data and create hierarchical plots.
@@ -1312,6 +1628,10 @@ def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=No
     tseries_segments = {seg: {} for seg in segment_names}
     fly_segments = {seg: defaultdict(list) for seg in segment_names}
     all_segments = {seg: [] for seg in segment_names}
+
+    # Storage for individual ROI traces (for clustering)
+    condition_rois = []              # list of (trace, fly_id, tseries_key)
+    fly_rois       = defaultdict(list)  # fly_id -> list of (trace, fly_id, tseries_key)
     
     # Process each TSeries
     for tseries_idx, (tseries_key, tseries_data) in enumerate(data.items()):
@@ -1363,6 +1683,12 @@ def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=No
         interpolated_traces = [trace[:min_length] for trace in interpolated_traces]
         common_time = common_time[:min_length]
         interpolated_traces = np.array(interpolated_traces)
+
+        # ---- collect individual ROIs for clustering ----
+        for roi_trace in interpolated_traces:
+            entry = (roi_trace, fly_id, tseries_key)
+            condition_rois.append(entry)
+            fly_rois[fly_id].append(entry)
         
         # Plot 1: Individual ROIs and mean for this TSeries
         fig, mean_trace = plot_traces_with_mean(
@@ -1525,6 +1851,15 @@ def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=No
     
     across_fly_variability = analyze_across_fly_variability(fly_segments, mean_fps, output_dir)
     
+    # Run response profile clustering
+    analyze_response_clustering(
+        condition_rois, fly_rois, segments, mean_fps,
+        stim_protocol, stim_time, output_dir,
+        polarity_results=polarity_results,
+        luminance_results=luminance_results,
+        contrast_results=contrast_results,
+        frequency_results=frequency_results)
+
     return tseries_means, fly_averaged_traces, global_mean, segment_results, luminance_results, polarity_results, contrast_results, frequency_results, variability_results, across_fly_variability
 
 def plot_combined_analysis(all_results, pkl_files, output_dir):

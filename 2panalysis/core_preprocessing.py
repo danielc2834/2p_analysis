@@ -25,6 +25,7 @@ from scipy.stats import shapiro, ttest_ind, mannwhitneyu, wilcoxon, kruskal
 import scikit_posthocs as sp
 from datetime import date
 from skimage.color import label2rgb
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 ################################################ Statistics ################################################
 def all_possible_pairs(list):
@@ -1695,8 +1696,7 @@ def processXmlInfo(data_path):
     imaging_info['layerPosition']=getLayerPosition(xmlPath)
     return imaging_info
 
-
-def selectManualROIs(image_to_select_from, image_cmap ="gray", ask_name=True, xcorrimg=None):
+def selectManualROIs(image_to_select_from, image_cmap ="gray", ask_name=True, xcorrimg=None, cat_overlay_img=None):
     '''Enables user to select rois from a given image using roipoly module
     
     Parameters
@@ -1722,15 +1722,17 @@ def selectManualROIs(image_to_select_from, image_cmap ="gray", ask_name=True, xc
     mask_agg = np.zeros(shape=(im_xDim,im_yDim))
     plt.style.use("dark_background")
     while (stopsignal==0):
-        # Show the image
-        # fig = plt.figure()
-
         fig = plt.figure(figsize=(8, 6))
         plt.subplot(1, 2, 1)
         plt.imshow(xcorrimg[0].T, cmap='Spectral')
         plt.title('Cross-Correlation Image')
         plt.subplot(1, 2, 2)
-        plt.imshow(image_to_select_from, interpolation='nearest', cmap=image_cmap)
+        if cat_overlay_img is not None:
+            cat_overlay_img[cat_overlay_img==0] = np.nan
+            plt.imshow(image_to_select_from, interpolation='nearest', cmap=image_cmap)
+            plt.imshow(cat_overlay_img, alpha=0.1,cmap = 'Accent')
+        else:
+            plt.imshow(image_to_select_from, interpolation='nearest', cmap=image_cmap)
         plt.colorbar()
         curr_agg = mask_agg.copy()
         curr_agg[curr_agg==0] = np.nan
@@ -1742,6 +1744,7 @@ def selectManualROIs(image_to_select_from, image_cmap ="gray", ask_name=True, xc
         iROI = iROI + 1
         if ask_name: 
             mask_name = input("\nEnter the ROI name:\n>> ") 
+            
         else:
             mask_name = iROI
         curr_mask = curr_roi.get_mask(image_to_select_from)
@@ -1755,7 +1758,7 @@ def selectManualROIs(image_to_select_from, image_cmap ="gray", ask_name=True, xc
         signal = input("\nPress k for exiting program, otherwise press enter:\n>>")
         if (signal == 'k'):
             stopsignal = 1
-    return roi_masks, mask_names
+    return roi_masks, mask_names, mask_agg
 
 def selectROIs(extraction_type, error_log,image_to_select, xcorrimg=None):
     '''Extraction of ROIS
@@ -1786,9 +1789,9 @@ def selectROIs(extraction_type, error_log,image_to_select, xcorrimg=None):
         plt.close('all')
         plt.style.use("default")
         print('\n\nSelect categories and background')
-        cat_masks, cat_names = selectManualROIs(image_to_select, image_cmap="gray", xcorrimg=xcorrimg)
+        cat_masks, cat_names, overlay_img = selectManualROIs(image_to_select, image_cmap="gray", xcorrimg=xcorrimg)
         print('\n\nSelect ROIs')
-        roi_masks, roi_names = selectManualROIs(image_to_select, image_cmap="gray",ask_name=False, xcorrimg=xcorrimg)
+        roi_masks, roi_names, _ = selectManualROIs(image_to_select, image_cmap="gray",ask_name=False, xcorrimg=xcorrimg, cat_overlay_img=overlay_img)
         return cat_masks, cat_names, roi_masks, roi_names
     else:
         open(error_log, 'a', encoding="utf8").write(f'ROI extraction type not defined >> check documentation')

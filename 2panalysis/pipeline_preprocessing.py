@@ -42,6 +42,7 @@ if select_rois == 0:
     subprocess.run(['python', "2panalysis/preprocess_rois.py", paths.folder, error_log, metadata_path])
 # pooling to make DATA for analysis_odor_responses, and raw_traces >> TODO:change if time
 print('pooling DATA')
+#TODO: pooling progress to fals eif not in the file
 subprocess.run(['python', "2panalysis/preprocess_pooling.py", paths.folder, error_log, metadata_path])
 end = time.time()
 runtime = end - start 

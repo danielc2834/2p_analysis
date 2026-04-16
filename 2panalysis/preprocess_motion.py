@@ -17,6 +17,8 @@ with open(f'{paths.processed}/processing_progress.pkl', 'rb') as fi:
     processing_progress = pickle.load(fi)
 ################################
 for condition in os.listdir(paths.raw):
+    if 'chirp' not in condition:
+            continue
     if condition not in processing_progress.keys():
             processing_progress[condition] = {}
     for fly in os.listdir(f'{paths.raw}/{condition}'):

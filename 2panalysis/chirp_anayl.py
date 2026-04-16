@@ -8,13 +8,10 @@ from scipy.spatial.distance import squareform
 from scipy.cluster.hierarchy import linkage, dendrogram as sp_dendrogram
 from collections import defaultdict
 import os
-from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score
-from sklearn.decomposition import PCA, SparsePCA
+from sklearn.decomposition import PCA
 from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import StandardScaler
 import umap
-import hdbscan
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -145,7 +142,7 @@ def interpolate_trace(df_trace, original_fps, target_fps, trim_seconds=5, detren
     
     return interpolated_trace, new_time
 
-def plot_traces_with_mean(traces, time, stim_protocol, stim_time, title, ylabel='ΔF/F', alpha=0.3, xlim=None):
+def plot_traces_with_mean(traces, time, stim_protocol, stim_time, title, ylabel='ΔF/F', alpha=0.3, ylim=None):
     """
     Plot individual traces and their mean with stimulus protocol on top.
     
@@ -171,16 +168,14 @@ def plot_traces_with_mean(traces, time, stim_protocol, stim_time, title, ylabel=
     # Create gridspec for subplots with height ratio
     gs = fig.add_gridspec(2, 1, height_ratios=[1, 4], hspace=0.05)
     
-    # Determine x-axis limits
+    # Determine axis limits
     max_time = max(time[-1], stim_time[-1])
-    x_min = xlim[0] if xlim is not None else 0
-    x_max = xlim[1] if xlim is not None else max_time
 
     # Top subplot: Stimulus protocol (without axes)
     ax_stim = fig.add_subplot(gs[0])
     ax_stim.fill_between(stim_time, 0, stim_protocol, color='lightblue', alpha=0.7, linewidth=0)
     ax_stim.plot(stim_time, stim_protocol, color='blue', linewidth=1.5)
-    ax_stim.set_xlim(x_min, x_max)
+    ax_stim.set_xlim(0, max_time)
     ax_stim.set_ylim(-0.1, 1.1)
     ax_stim.axis('off')
     ax_stim.set_title(title, fontsize=14, fontweight='bold', pad=10)
@@ -204,7 +199,8 @@ def plot_traces_with_mean(traces, time, stim_protocol, stim_time, title, ylabel=
     ax_trace.set_ylabel(ylabel, fontsize=12)
     ax_trace.legend(loc='upper right')
     ax_trace.grid(True, alpha=0.3)
-    ax_trace.set_xlim(x_min, x_max)
+    if ylim is not None:
+        ax_trace.set_ylim(ylim[0], ylim[1])
     
     plt.tight_layout()
     return fig, mean_trace
@@ -1094,7 +1090,12 @@ def extract_roi_features(trace, time, segments, mean_fps,
                          polarity_results=None, luminance_results=None,
                          contrast_results=None, frequency_results=None):
     """
-    Extract a feature vector from a single ROI trace.
+    Extract a per-ROI feature vector from a single replicate-averaged trace.
+    All features are computed directly from this ROI's own trace — no
+    population-level values are used, so every ROI gets a unique feature vector.
+
+    Parameters kept for backward-compatibility but no longer used:
+        polarity_results, luminance_results, contrast_results, frequency_results
 
     Returns
     -------
@@ -1149,67 +1150,144 @@ def extract_roi_features(trace, time, segments, mean_fps,
             rise = 0.0
         features.append(rise); names.append(f'{seg_name}_rise')
 
-    # --- scalar metrics from already-computed analyses (optional) ---
-    # ON amplitude
-    on_amp  = np.nan
-    off_amp = np.nan
-    if polarity_results is not None:
-        on_amp  = polarity_results.get('overall_on_mean',  np.nan)
-        off_amp = polarity_results.get('overall_off_mean', np.nan)
-    features.append(float(on_amp)  if np.isfinite(on_amp)  else 0.0); names.append('on_amplitude')
-    features.append(float(off_amp) if np.isfinite(off_amp) else 0.0); names.append('off_amplitude')
+    # --- Per-ROI stimulus-locked scalars (all computed from this ROI's trace) ---
+    # These replace the previous population-level lookups (overall_on_mean etc.)
+    # which gave every ROI in the same condition the same value.
+    # The trace passed in is already the replicate-averaged trace for this ROI.
 
-    # Luminance slope
-    lum_slope = np.nan
-    if luminance_results is not None:
-        lum_slope = luminance_results.get('mean_slope', np.nan)
-    features.append(float(lum_slope) if np.isfinite(lum_slope) else 0.0); names.append('lum_slope')
+    # ON amplitude: mean ΔF/F in 6-8 s of polarity segment, baseline-subtracted
+    # OFF amplitude: mean ΔF/F in 9-11 s of polarity segment, baseline-subtracted
+    pol_start, pol_end = segments.get('polarity', (0, 14))
+    i0p = int(pol_start * mean_fps)
+    i1p = min(int(pol_end * mean_fps), len(trace))
+    pol_seg = trace[i0p:i1p]
+    on_w_s,  on_w_e  = int(6 * mean_fps), min(int(8  * mean_fps), len(pol_seg))
+    off_w_s, off_w_e = int(9 * mean_fps), min(int(11 * mean_fps), len(pol_seg))
+    # baseline: 1 s before ON transition (frames 5-6 s)
+    bl_s, bl_e = int(5 * mean_fps), int(6 * mean_fps)
+    bl_pol = float(np.mean(pol_seg[bl_s:bl_e])) if bl_e <= len(pol_seg) else 0.0
+
+    if on_w_e > on_w_s and on_w_e <= len(pol_seg):
+        on_amp = float(np.mean(pol_seg[on_w_s:on_w_e])) - bl_pol
+    else:
+        on_amp = 0.0
+    if off_w_e > off_w_s and off_w_e <= len(pol_seg):
+        off_amp = float(np.mean(pol_seg[off_w_s:off_w_e])) - bl_pol
+    else:
+        off_amp = 0.0
+    features.append(on_amp);  names.append('on_amplitude')
+    features.append(off_amp); names.append('off_amplitude')
+
+    # Luminance slope: linear fit of mean response at each luminance step.
+    # Mirrors analyze_luminance_response but for a single ROI trace.
+    lum_values    = [0, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0,
+                     0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1,
+                     0, 0.1, 0.2, 0.3, 0.4, 0.5]
+    lum_durations = [2] + [0.5] * 16 + [2] + [0.5] * 4 + [0.5]  # seconds per step
+    lum_start, lum_end = segments.get('luminance', (35, 47))
+    i0l = int(lum_start * mean_fps)
+    lum_seg = trace[i0l:min(int(lum_end * mean_fps), len(trace))]
+    # baseline: first step (2 s of luminance=0)
+    bl_frames_l = max(1, int(lum_durations[0] * mean_fps))
+    bl_lum      = float(np.mean(lum_seg[:bl_frames_l])) if len(lum_seg) >= bl_frames_l else 0.0
+    step_means, step_lum_vals = [], []
+    cur = 0
+    for lv, dur in zip(lum_values, lum_durations):
+        nf = int(dur * mean_fps)
+        if cur + nf <= len(lum_seg):
+            step_means.append(float(np.mean(lum_seg[cur:cur + nf])) - bl_lum)
+            step_lum_vals.append(lv)
+        cur += nf
+    if len(step_lum_vals) >= 2:
+        lum_slope, _ = np.polyfit(step_lum_vals, step_means, 1)
+        lum_slope = float(lum_slope)
+    else:
+        lum_slope = 0.0
+    features.append(lum_slope); names.append('lum_slope')
 
     # --- Stimulus-locked response indices (Baden et al. 2016 style) ----------
-    # ON-OFF polarity index from polarity segment: (ON - OFF) / (ON + OFF)
-    pol_start, pol_end = segments.get('polarity', (0, 14))
-    i0p = int(pol_start * mean_fps); i1p = min(int(pol_end * mean_fps), len(trace))
-    pol_seg = trace[i0p:i1p]
-    # ON window: 6-8 s into polarity segment; OFF window: 9-11 s
-    on_w_s,  on_w_e  = int(6*mean_fps), int(8*mean_fps)
-    off_w_s, off_w_e = int(9*mean_fps), int(11*mean_fps)
-    if off_w_e <= len(pol_seg):
-        mean_on  = float(np.mean(pol_seg[on_w_s:on_w_e]))
-        mean_off = float(np.mean(pol_seg[off_w_s:off_w_e]))
-        denom = abs(mean_on) + abs(mean_off)
-        oo_idx = (mean_on - mean_off) / denom if denom > 0 else 0.0
-    else:
-        oo_idx = 0.0
+    # ON-OFF polarity index: reuse on_amp / off_amp computed above
+    denom = abs(on_amp) + abs(off_amp)
+    oo_idx = (on_amp - off_amp) / denom if denom > 0 else 0.0
     features.append(oo_idx); names.append('on_off_index')
 
-    # Frequency index: (high-freq response - low-freq response) / sum
-    # Use middle vs. start of frequency segment as proxy for high vs low freq
-    freq_start, freq_end = segments.get('frequency', (14, 25))
-    i0f = int(freq_start * mean_fps); i1f = min(int(freq_end * mean_fps), len(trace))
-    freq_seg = trace[i0f:i1f]
-    n_freq = len(freq_seg)
-    if n_freq > 4:
-        f_lo = float(np.mean(freq_seg[:n_freq//2]))
-        f_hi = float(np.mean(freq_seg[n_freq//2:]))
-        denom = abs(f_lo) + abs(f_hi)
-        freq_idx = (f_hi - f_lo) / denom if denom > 0 else 0.0
-    else:
-        freq_idx = 0.0
-    features.append(freq_idx); names.append('freq_index')
+    # Frequency tuning peak: extract max response per temporal frequency bin,
+    # return the frequency (Hz) at which the ROI responds most strongly.
+    # Uses the same flash_durations and binning as analyze_frequency_response.
+    flash_durations = [
+        0.243, 0.449, 0.406, 0.372, 0.343, 0.317, 0.296, 0.277, 0.26, 0.246,
+        0.232, 0.221, 0.21, 0.2, 0.192, 0.183, 0.176, 0.169, 0.163, 0.157,
+        0.151, 0.146, 0.142, 0.137, 0.133, 0.129, 0.125, 0.122, 0.118, 0.115,
+        0.112, 0.11, 0.107, 0.104, 0.102, 0.099, 0.097, 0.095, 0.093, 0.091,
+        0.09, 0.087, 0.086, 0.084, 0.082, 0.081, 0.079, 0.078, 0.077, 0.075,
+        0.074, 0.073, 0.072, 0.07, 0.069, 0.068, 0.068, 0.066, 0.065, 0.064,
+        0.063, 0.062, 0.062, 0.06, 0.06, 0.059, 0.058, 0.058, 0.056, 0.056,
+        0.055, 0.055, 0.054, 0.053, 0.052, 0.052, 0.052, 0.05]
+    flash_freqs = [1.0 / (2 * d) for d in flash_durations]
+    freq_bin_edges = list(range(0, 11))   # 0-1, 1-2, ..., 9-10 Hz
 
-    # Contrast index: (high-contrast response - low-contrast response) / sum
-    cont_start, cont_end = segments.get('contrast', (25, 35))
-    i0c = int(cont_start * mean_fps); i1c = min(int(cont_end * mean_fps), len(trace))
-    cont_seg = trace[i0c:i1c]
-    n_cont = len(cont_seg)
-    if n_cont > 4:
-        c_lo = float(np.mean(cont_seg[:n_cont//2]))
-        c_hi = float(np.mean(cont_seg[n_cont//2:]))
-        denom = abs(c_lo) + abs(c_hi)
-        cont_idx = (c_hi - c_lo) / denom if denom > 0 else 0.0
+    freq_start, freq_end = segments.get('frequency', (14, 25))
+    i0f = int(freq_start * mean_fps)
+    # baseline: first 0.5 s of frequency segment
+    bl_frames_f = max(1, int(0.5 * mean_fps))
+    freq_baseline = float(np.mean(trace[i0f:i0f + bl_frames_f])) \
+                    if i0f + bl_frames_f <= len(trace) else 0.0
+
+    bin_responses = defaultdict(list)
+    cur_f = i0f + bl_frames_f
+    for freq, dur in zip(flash_freqs, flash_durations):
+        nf = max(1, int(dur * mean_fps))
+        if cur_f + nf > len(trace):
+            break
+        seg_f = trace[cur_f:cur_f + nf]
+        amp_f = float(np.max(seg_f - freq_baseline))
+        # assign to 1-Hz bin
+        for b in range(len(freq_bin_edges) - 1):
+            if freq_bin_edges[b] <= freq < freq_bin_edges[b + 1]:
+                bin_responses[freq_bin_edges[b]].append(amp_f)
+                break
+        cur_f += nf
+
+    if bin_responses:
+        bin_means = {b: np.mean(v) for b, v in bin_responses.items()}
+        freq_peak = float(max(bin_means, key=bin_means.get))
     else:
-        cont_idx = 0.0
-    features.append(cont_idx); names.append('contrast_index')
+        freq_peak = 0.0
+    features.append(freq_peak); names.append('freq_tuning_peak_hz')
+
+    # Contrast tuning peak: extract mean response per absolute contrast step,
+    # return the Weber contrast (%) at which the ROI responds most strongly.
+    # Uses the same contrast_values and durations as analyze_contrast_response.
+    contrast_values    = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0,
+                          0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0]
+    contrast_durations = [2.0] + [0.5] * 15
+    background = 0.5
+
+    cont_start, cont_end = segments.get('contrast', (25, 35))
+    i0c = int(cont_start * mean_fps)
+    bl_frames_c  = max(1, int(contrast_durations[0] * mean_fps))
+    cont_baseline = float(np.mean(trace[i0c:i0c + bl_frames_c])) \
+                    if i0c + bl_frames_c <= len(trace) else 0.0
+
+    abs_contrast_responses = {}
+    cur_c = i0c
+    for cv, dur in zip(contrast_values, contrast_durations):
+        nf = max(1, int(dur * mean_fps))
+        if cur_c + nf <= len(trace):
+            seg_c = trace[cur_c:cur_c + nf]
+            amp_c = float(np.mean(seg_c)) - cont_baseline
+            abs_c = round(abs(cv - background) / background * 100, 1)
+            if abs_c not in abs_contrast_responses:
+                abs_contrast_responses[abs_c] = []
+            abs_contrast_responses[abs_c].append(amp_c)
+        cur_c += nf
+
+    if abs_contrast_responses:
+        abs_means = {c: np.mean(v) for c, v in abs_contrast_responses.items()}
+        cont_peak = float(max(abs_means, key=abs_means.get))
+    else:
+        cont_peak = 0.0
+    features.append(cont_peak); names.append('contrast_tuning_peak_pct')
 
     return np.array(features, dtype=float), names
 
@@ -1325,8 +1403,36 @@ def prepare_clustering_data(roi_list, feature_set, segments, mean_fps,
             valid_idx.append(i)
 
     elif feature_set == 'spca':
-        # Sparse PCA on normalized full traces (Baden et al. 2016)
-        all_tr = [r[0] for r in roi_list]
+        # ── Sparse PCA following Baden et al. 2016 ──────────────────────────
+        # The paper uses SpaSM (Sjöstrand et al.) which produces SPARSE LOADINGS:
+        # each component activates at only n_nonzero time bins, making it
+        # interpretable as a localised temporal feature (e.g. "sustained OFF
+        # response", "high-frequency modulation").
+        #
+        # sklearn's SparsePCA sparsifies the CODES (per-sample scores), not
+        # the loadings — the opposite of what the paper does.  We therefore
+        # implement sparse loadings directly:
+        #   1. Fit regular PCA (gives globally smooth components).
+        #   2. For each component, zero out all but the n_nonzero largest
+        #      absolute loadings (hard thresholding).
+        #   3. Re-normalise each sparse component to unit length.
+        #   4. Project all samples onto the sparse components → feature matrix.
+        #   5. Standardise each feature across the population (paper: "we
+        #      standardised each feature separately across the population").
+        #
+        # Parameters from the paper (chirp only):
+        #   n_components = 20   (paper: 20 features from chirp)
+        #   n_nonzero    = 10   (paper: "10 non-zero time bins")
+        #
+        # Deviations from paper that cannot be avoided:
+        #   • Paper uses 40-dim vector (chirp + colour + moving-bar + RF).
+        #     We have chirp only → 20-dim vector.
+        #   • Hard thresholding ≠ SpaSM's optimisation, but produces
+        #     components with the same structural property (localised in time).
+        N_COMP    = 20   # Baden et al.: 20 features from chirp
+        N_NONZERO = 10   # Baden et al.: 10 non-zero time bins per component
+
+        all_tr  = [r[0] for r in roi_list]
         min_len = min(len(t) for t in all_tr)
         normed  = []
         for trace, fly_id, ts_key in roi_list:
@@ -1335,25 +1441,49 @@ def prepare_clustering_data(roi_list, feature_set, segments, mean_fps,
             traces_out.append(trace)
             fly_labels.append(fly_id)
             tseries_labels.append(ts_key)
-        X_norm = np.vstack(normed)
-        n_comp = min(20, X_norm.shape[0] - 1, X_norm.shape[1])
-        print(f"      Fitting SparsePCA (n={X_norm.shape[0]} ROIs × {X_norm.shape[1]} frames) ...")
-        spca = SparsePCA(n_components=n_comp, alpha=1.0, max_iter=200,
-                         n_jobs=-1, random_state=42)
-        X_features = spca.fit_transform(X_norm)
+        X_norm = np.vstack(normed)   # shape (n_rois, n_frames)
+
+        # Clamp n_components to what the data can support
+        n_comp    = min(N_COMP, X_norm.shape[0] - 1, X_norm.shape[1])
+        n_nonzero = min(N_NONZERO, X_norm.shape[1])
+
+        print(f"      Fitting sparse-loading PCA "
+              f"(n={X_norm.shape[0]} ROIs × {X_norm.shape[1]} frames, "
+              f"{n_comp} components, {n_nonzero} non-zero time bins) ...")
+
+        pca = PCA(n_components=n_comp, random_state=42)
+        pca.fit(X_norm)
+
+        # Sparsify: keep only top n_nonzero absolute loadings per component
+        sparse_components = pca.components_.copy()   # (n_comp, n_frames)
+        for ci in range(n_comp):
+            comp   = sparse_components[ci]
+            thresh = np.sort(np.abs(comp))[-n_nonzero]   # n_nonzero-th largest
+            comp[np.abs(comp) < thresh] = 0.0
+            norm = np.linalg.norm(comp)
+            if norm > 0:
+                sparse_components[ci] = comp / norm
+
+        # Project onto sparse components
+        X_features = X_norm @ sparse_components.T   # (n_rois, n_comp)
+
+        # Report average achieved sparsity
+        avg_nonzero = np.mean(np.sum(sparse_components != 0, axis=1))
+        print(f"      Avg non-zero loadings per component: {avg_nonzero:.1f} "
+              f"(target {n_nonzero})")
+
         for i in range(len(roi_list)):
             row = X_features[i]
             if not np.all(np.isfinite(row)):
                 continue
             X_rows.append(row)
             valid_idx.append(i)
-        # traces_out / fly_labels already filled above
+
+        # Re-filter metadata lists if any rows were dropped
         if len(X_rows) != len(traces_out):
-            # re-filter to keep only valid
-            keep = valid_idx
-            traces_out  = [traces_out[k]  for k in keep]
-            fly_labels  = [fly_labels[k]  for k in keep]
-            tseries_labels = [tseries_labels[k] for k in keep]
+            traces_out     = [traces_out[k]     for k in valid_idx]
+            fly_labels     = [fly_labels[k]     for k in valid_idx]
+            tseries_labels = [tseries_labels[k] for k in valid_idx]
 
     if len(X_rows) == 0:
         return None, None, None, None, None
@@ -1366,110 +1496,18 @@ def prepare_clustering_data(roi_list, feature_set, segments, mean_fps,
     return X, fly_labels, tseries_labels, traces_out, valid_idx
 
 
-def run_umap_hdbscan(X, min_cluster_size=10, n_neighbors=15, min_dist=0.1):
-    """UMAP embedding → HDBSCAN clustering."""
-    reducer   = umap.UMAP(n_components=2, n_neighbors=n_neighbors,
-                          min_dist=min_dist, random_state=42)
-    embedding = reducer.fit_transform(X)
-    clusterer = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size,
-                                 prediction_data=True)
-    labels    = clusterer.fit_predict(embedding)
-    return embedding, labels
+def _umap_embed(X, n_neighbors=15, min_dist=0.1):
+    """UMAP 2-D embedding — visualisation only, no clustering."""
+    reducer = umap.UMAP(n_components=2, n_neighbors=n_neighbors,
+                        min_dist=min_dist, random_state=42)
+    return reducer.fit_transform(X)
 
 
-def run_umap_kmeans(X, k_range=range(2, 9), n_neighbors=15, min_dist=0.1):
-    """UMAP embedding → k-means sweep, return embedding + best labels + diagnostics."""
-    reducer   = umap.UMAP(n_components=2, n_neighbors=n_neighbors,
-                          min_dist=min_dist, random_state=42)
-    embedding = reducer.fit_transform(X)
-
-    inertias    = []
-    sil_scores  = []
-    all_labels  = {}
-
-    for k in k_range:
-        if k >= len(X):
-            break
-        km     = KMeans(n_clusters=k, random_state=42, n_init=10)
-        lbls   = km.fit_predict(X)          # cluster in original space
-        inertias.append(km.inertia_)
-        try:
-            sil = silhouette_score(X, lbls)
-        except Exception:
-            sil = 0.0
-        sil_scores.append(sil)
-        all_labels[k] = lbls
-
-    diagnostics = {'k_range': list(k_range)[:len(inertias)],
-                   'inertias': inertias,
-                   'silhouette': sil_scores,
-                   'all_labels': all_labels}
-
-    best_k    = diagnostics['k_range'][int(np.argmax(sil_scores))] if sil_scores else 2
-    best_lbls = all_labels.get(best_k, np.zeros(len(X), dtype=int))
-    return embedding, best_lbls, best_k, diagnostics
-
-
-def run_pca_kmeans(X, k_range=range(2, 9)):
-    """PCA embedding → k-means sweep (for per-fly scope)."""
-    n_comp  = min(2, X.shape[0] - 1, X.shape[1])
-    pca     = PCA(n_components=n_comp)
-    embedding = pca.fit_transform(X)
-
-    inertias   = []
-    sil_scores = []
-    all_labels = {}
-
-    for k in k_range:
-        if k >= len(X):
-            break
-        km   = KMeans(n_clusters=k, random_state=42, n_init=10)
-        lbls = km.fit_predict(X)
-        inertias.append(km.inertia_)
-        try:
-            sil = silhouette_score(X, lbls)
-        except Exception:
-            sil = 0.0
-        sil_scores.append(sil)
-        all_labels[k] = lbls
-
-    diagnostics = {'k_range': list(k_range)[:len(inertias)],
-                   'inertias': inertias,
-                   'silhouette': sil_scores,
-                   'all_labels': all_labels}
-
-    best_k    = diagnostics['k_range'][int(np.argmax(sil_scores))] if sil_scores else 2
-    best_lbls = all_labels.get(best_k, np.zeros(len(X), dtype=int))
-    return embedding, best_lbls, best_k, diagnostics
-
-
-def plot_cluster_diagnostics(diagnostics, title, save_path):
-    """Silhouette score and elbow (inertia) plots."""
-    k_range  = diagnostics['k_range']
-    if len(k_range) == 0:
-        return
-
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-
-    ax1.plot(k_range, diagnostics['silhouette'], 'o-', color='steelblue', linewidth=2)
-    best_idx = int(np.argmax(diagnostics['silhouette']))
-    ax1.axvline(k_range[best_idx], color='red', linestyle='--',
-                label=f'Best k={k_range[best_idx]}')
-    ax1.set_xlabel('Number of clusters (k)', fontsize=12)
-    ax1.set_ylabel('Silhouette score', fontsize=12)
-    ax1.set_title('Silhouette Diagnostics', fontsize=13, fontweight='bold')
-    ax1.legend(); ax1.grid(True, alpha=0.3)
-
-    ax2.plot(k_range, diagnostics['inertias'], 'o-', color='coral', linewidth=2)
-    ax2.set_xlabel('Number of clusters (k)', fontsize=12)
-    ax2.set_ylabel('Inertia', fontsize=12)
-    ax2.set_title('Elbow Curve', fontsize=13, fontweight='bold')
-    ax2.grid(True, alpha=0.3)
-
-    fig.suptitle(title, fontsize=14, fontweight='bold')
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
-    plt.close()
+def _pca_embed(X):
+    """PCA 2-D embedding — visualisation only, for small-N per-fly scope."""
+    n_comp    = min(2, X.shape[0] - 1, X.shape[1])
+    embedding = PCA(n_components=n_comp).fit_transform(X)
+    return embedding
 
 
 def plot_embedding_scatter(embedding, labels, title, save_path,
@@ -1651,8 +1689,12 @@ def compute_response_qi(trace_list):
 def run_gmm_bic(X, k_range=range(2, 13)):
     """
     Gaussian Mixture Model with BIC-based cluster number selection.
-    Follows Baden et al. 2016: diagonal covariance, 20 random initialisations.
-    Returns labels, best_k, posterior probabilities, diagnostics dict.
+    Follows Baden et al. 2016:
+      - Diagonal covariance
+      - Covariance regularisation: reg_covar = 1e-5 (adds constant to diagonal)
+      - 20 random EM restarts per k, keep solution with highest likelihood
+      - BIC as model selection criterion
+      - Log Bayes factors 2·ΔBIC(k→k+1) to validate splitting
     """
     bic_vals, models = [], {}
     ks = []
@@ -1660,6 +1702,7 @@ def run_gmm_bic(X, k_range=range(2, 13)):
         if k >= len(X):
             break
         gmm = GaussianMixture(n_components=k, covariance_type='diag',
+                              reg_covar=1e-5,        # Baden et al. 2016
                               n_init=20, max_iter=300, random_state=42)
         gmm.fit(X)
         bic_vals.append(gmm.bic(X))
@@ -1669,23 +1712,47 @@ def run_gmm_bic(X, k_range=range(2, 13)):
     if not ks:
         return np.zeros(len(X), dtype=int), 1, np.ones((len(X), 1)), {}
 
-    best_idx = int(np.argmin(bic_vals))
-    best_k   = ks[best_idx]
-    best_gmm = models[best_k]
+    bic_arr = np.array(bic_vals)
+
+    # Adjacent log Bayes factors: 2*(BIC(k_{i-1}) - BIC(k_i))
+    # Positive = evidence FOR the larger k.  Stop when value drops below 6.
+    log_bf = np.concatenate([[0], 2 * (bic_arr[:-1] - bic_arr[1:])])
+
+    # Best k: scan forward, stop at the FIRST transition where log_bf drops
+    # below 6.  This matches Baden et al. 2016: keep splitting only while
+    # there is consecutive strong evidence; a spurious positive at a later k
+    # does not re-open splitting.  Fall back to argmin(BIC) when no transition
+    # is strong (very clean data with only 2 clusters, or too few data points).
+    best_idx = 0  # default: smallest k in range
+    for i in range(1, len(ks)):
+        if log_bf[i] > 6:
+            best_idx = i   # accept this split
+        else:
+            break          # first non-strong transition → stop here
+
+    best_k = ks[best_idx]
+    best_gmm   = models[best_k]
     labels     = best_gmm.predict(X)
     posteriors = best_gmm.predict_proba(X)
 
-    # Log Bayes factors: 2*(BIC(k-1) - BIC(k)) for consecutive k.
-    # Positive value = evidence in favour of the larger k.
-    # Threshold >6 = strong evidence (Kass & Raftery 1995, absolute scale).
-    # Value drops below 6 at the optimal k → stop adding clusters there.
-    bic_arr = np.array(bic_vals)
-    # First entry has no predecessor → set to 0
-    log_bf = np.concatenate([[0], 2 * (bic_arr[:-1] - bic_arr[1:])])
+    # BIC ambiguity score: improvement at best_k as fraction of total BIC range.
+    # Near 0 = shallow minimum = ambiguous.  Near 1 = sharp minimum = clear.
+    bic_range = bic_arr.max() - bic_arr.min()
+    if best_idx > 0 and bic_range > 0:
+        improvement = bic_arr[best_idx - 1] - bic_arr[best_idx]
+        ambiguity_score = float(improvement / bic_range)
+    else:
+        ambiguity_score = 0.0
+
+    if ambiguity_score < 0.1:
+        print(f"      ⚠ BIC ambiguity: shallow minimum "
+              f"(score={ambiguity_score:.3f} < 0.1). "
+              f"k={best_k} is a weak recommendation — inspect the BIC plot.")
 
     diagnostics = {
         'k_range': ks, 'bic': bic_vals, 'log_bf': log_bf.tolist(),
         'best_k': best_k, 'models': models,
+        'ambiguity_score': ambiguity_score,
     }
     return labels, best_k, posteriors, diagnostics
 
@@ -1726,7 +1793,7 @@ def validate_cluster_stability(X, best_k, n_bootstrap=20, frac=0.9):
     """
     N = len(X)
     orig_gmm = GaussianMixture(n_components=best_k, covariance_type='diag',
-                               n_init=20, random_state=42)
+                               reg_covar=1e-5, n_init=20, random_state=42)
     orig_gmm.fit(X)
     orig_means = orig_gmm.means_
 
@@ -1740,7 +1807,7 @@ def validate_cluster_stability(X, best_k, n_bootstrap=20, frac=0.9):
     for i in range(n_bootstrap):
         idx   = rng.choice(N, n_sub, replace=False)
         gmm_s = GaussianMixture(n_components=best_k, covariance_type='diag',
-                                n_init=10, random_state=i)
+                                reg_covar=1e-5, n_init=10, random_state=i)
         gmm_s.fit(X[idx])
 
         # Match sub-clusters to original clusters by mean correlation
@@ -1813,6 +1880,18 @@ def plot_gmm_diagnostics(gmm_diag, dprime, ulbls, bootstrap_corrs, title, save_p
             ax.axvline(best_k, color='red', linestyle='--',
                        label=f'Best k = {best_k}')
         ax.set_ylim(-0.05, 1.05)
+        # Ambiguity annotation
+        amb = gmm_diag.get('ambiguity_score', None)
+        if amb is not None:
+            colour = '#2ecc71' if amb >= 0.1 else '#e74c3c'
+            label  = ('Sharp minimum — clear k'
+                      if amb >= 0.1 else
+                      '⚠ Shallow minimum — ambiguous k')
+            ax.text(0.97, 0.97, f'Ambiguity score: {amb:.3f}\n{label}',
+                    ha='right', va='top', transform=ax.transAxes,
+                    fontsize=8, color=colour,
+                    bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
+                              edgecolor=colour, alpha=0.85))
     ax.set_xlabel('Number of clusters (k)', fontsize=10)
     ax.set_ylabel('Normalised BIC (0 = best)', fontsize=10)
     ax.set_title('BIC — lower is better\n(normalised; absolute values are arbitrary)',
@@ -1895,17 +1974,18 @@ def plot_cluster_dendrogram(cluster_means, title, save_path):
 
 
 def plot_cluster_heatmap(traces, labels, mean_fps, title, save_path,
-                         cluster_means=None):
+                         cluster_means=None, normalize=False):
     """
-    Heat map of all normalised ROI responses sorted by cluster,
-    with an optional dendrogram of cluster means shown on the right side.
+    Heat map of ROI responses sorted by cluster, with optional dendrogram.
 
     Parameters
     ----------
-    cluster_means : list of arrays or None
-        If provided, a dendrogram is drawn to the right of the heatmap.
-        Each entry is the mean normalised trace for one cluster (same order
-        as sorted(set(labels))).
+    normalize : bool
+        If False (default): show raw ΔF/F — amplitude variation is preserved,
+        consistent with feature clustering where amplitude features (peak, trough,
+        AUC) were used.
+        If True: normalise each ROI to its peak (max|ΔF/F|=1) — appropriate
+        only for the 'spca' feature set where sPCA was fit on normalised traces.
     """
     unique_clusters = sorted(set(labels))
     plot_clusters   = [c for c in unique_clusters if c != -1]
@@ -1922,8 +2002,13 @@ def plot_cluster_heatmap(traces, labels, mean_fps, title, save_path,
         sorted_idx.extend(idx)
         boundaries.append(len(sorted_idx))
 
-    mat  = np.vstack([_norm_trace(traces[i][:min_len], mean_fps) for i in sorted_idx])
+    mat  = np.vstack([
+        _norm_trace(traces[i][:min_len], mean_fps) if normalize
+        else traces[i][:min_len].astype(float)
+        for i in sorted_idx
+    ])
     vmax = float(np.percentile(np.abs(mat), 95))
+    cbar_label = 'ΔF/F (norm. to peak)' if normalize else 'ΔF/F'
 
     # ── layout: heatmap + optional dendrogram ────────────────────────────
     has_dend  = cluster_means is not None and len(cluster_means) > 1
@@ -1948,7 +2033,7 @@ def plot_cluster_heatmap(traces, labels, mean_fps, title, save_path,
                    ha='right', va='center', fontsize=9, fontweight='bold',
                    color=cmap_c(i % 10),
                    transform=ax_hm.get_yaxis_transform())
-    cb = plt.colorbar(im, ax=ax_hm, label='ΔF/F (norm. to peak)', shrink=0.6)
+    cb = plt.colorbar(im, ax=ax_hm, label=cbar_label, shrink=0.6)
     ax_hm.set_xlabel('Time (s)', fontsize=11)
     ax_hm.set_ylabel('ROI (sorted by cluster)', fontsize=11)
     ax_hm.set_title(title, fontsize=13, fontweight='bold')
@@ -2102,7 +2187,7 @@ def analyze_response_clustering(condition_rois, fly_rois, segments, mean_fps,
     Orchestrate all three clustering scopes × feature sets.
     Primary method: GMM + BIC (Baden et al. 2016).
     Visualisation: UMAP (condition scope) / PCA (per-fly scope).
-    Also runs UMAP + k-means and UMAP + HDBSCAN for comparison.
+    Also runs UMAP + k-means for comparison.
     """
     print("\n" + "="*60)
     print("Running response profile clustering...")
@@ -2115,7 +2200,41 @@ def analyze_response_clustering(condition_rois, fly_rois, segments, mean_fps,
         + [f'features_{s}' for s in seg_names]
     )
     k_range_gmm  = range(2, 13)
-    k_range_km   = range(2, 9)
+
+    # ── Description of the 26-feature 'features' vector ──────────────────
+    # Each ROI contributes one unique feature vector computed from its own
+    # replicate-averaged trace.  Features are grouped by segment:
+    #
+    # Per segment (×4 segments = 20 features):
+    #   [seg]_peak      — max ΔF/F above segment baseline
+    #   [seg]_trough    — min ΔF/F (captures inhibitory responses)
+    #   [seg]_auc       — area under |ΔF/F| curve (total response energy)
+    #   [seg]_peak_lat  — time to peak (s) — response onset speed
+    #   [seg]_rise      — 10→90% rise time (s) — response kinetics
+    #
+    # Global scalars (×6 features = 6 features):
+    #   on_amplitude    — mean ΔF/F in ON window (6-8 s of polarity segment)
+    #   off_amplitude   — mean ΔF/F in OFF window (9-11 s of polarity segment)
+    #   lum_slope       — linear slope of response vs luminance level
+    #   on_off_index    — (ON - OFF) / (|ON| + |OFF|)  ∈ [-1, +1]
+    #                     +1 = pure ON cell, -1 = pure OFF cell
+    #   freq_index      — (high-freq half - low-freq half) / sum  ∈ [-1, +1]
+    #                     +1 = prefers fast flicker, -1 = prefers slow
+    #   contrast_index  — (high-contrast half - low-contrast half) / sum ∈ [-1, +1]
+    #                     +1 = response grows with contrast,
+    #                     -1 = contrast-suppressed
+    #
+    # Total: 26 features per ROI.  All computed from the individual ROI
+    # trace — no population means used.  All standardised (z-scored) across
+    # the population before clustering.
+    print("\n  Feature vector description (26 features per ROI):")
+    print("    Per segment ×4 (polarity/frequency/contrast/luminance):")
+    print("      peak, trough, AUC, peak_latency, rise_time  → 20 features")
+    print("    Global scalars:")
+    print("      on_amplitude, off_amplitude, lum_slope      → 3 features")
+    print("      on_off_index                                → 1 feature")
+    print("      freq_tuning_peak_hz  (Hz of peak response)  → 1 feature")
+    print("      contrast_tuning_peak_pct  (% Weber contrast at peak) → 1 feature")
 
     _feat_subtitle     = ('Features per segment: peak, trough, AUC, peak-lat, rise  |  '
                           'Global: ON-amp, OFF-amp, lum-slope, ON-OFF-idx, freq-idx, cont-idx')
@@ -2167,7 +2286,7 @@ def analyze_response_clustering(condition_rois, fly_rois, segments, mean_fps,
             save_path=os.path.join(output_dir, f'clustering_gmm_diag_{pfx}.png'))
 
         # UMAP for visualisation of GMM clusters
-        emb_gmm, _, _, _ = run_umap_kmeans(X, range(best_k_gmm, best_k_gmm + 1))
+        emb_gmm = _umap_embed(X)
         plot_embedding_scatter(emb_gmm, gmm_labels,
             title=f'Condition | {fset} | GMM (k={best_k_gmm})',
             save_path=os.path.join(output_dir, f'clustering_umap_gmm_{pfx}.png'),
@@ -2178,48 +2297,28 @@ def analyze_response_clustering(condition_rois, fly_rois, segments, mean_fps,
             save_path=os.path.join(output_dir, f'clustering_traces_gmm_{pfx}.png'),
             seg_window=_seg_window(fset), feature_subtitle=_subtitle(fset))
 
-        # Dendrogram of GMM cluster means (in normalised trace space)
+        # Cluster means for dendrogram: use same representation as heatmap
+        _do_norm = (fset == 'spca')
         unique_gmm = sorted(set(gmm_labels))
         min_len = min(len(t) for t in traces)
-        cmeans  = [np.mean([_norm_trace(traces[i][:min_len], mean_fps)
-                            for i, l in enumerate(gmm_labels) if l == c], axis=0)
+        cmeans  = [np.mean([
+                       _norm_trace(traces[i][:min_len], mean_fps) if _do_norm
+                       else traces[i][:min_len].astype(float)
+                       for i, l in enumerate(gmm_labels) if l == c], axis=0)
                    for c in unique_gmm]
 
         # Heatmap sorted by GMM cluster — dendrogram embedded on the right
         plot_cluster_heatmap(traces, gmm_labels, mean_fps,
             title=f'Condition | {fset} | GMM heatmap (k={best_k_gmm})',
             save_path=os.path.join(output_dir, f'clustering_heatmap_gmm_{pfx}.png'),
-            cluster_means=cmeans if len(cmeans) > 1 else None)
+            cluster_means=cmeans if len(cmeans) > 1 else None,
+            normalize=_do_norm)
 
         # Bootstrap co-assignment confusion matrix
         plot_bootstrap_confusion(co_mat, gmm_labels,
             title=f'Condition | {fset} | Bootstrap co-assignment (k={best_k_gmm})',
             save_path=os.path.join(output_dir, f'clustering_confusion_gmm_{pfx}.png'))
 
-        # ---- UMAP + k-means (comparison) -----------------------------------
-        emb_km, best_labels_km, best_k, diag = run_umap_kmeans(X, k_range_km)
-        plot_cluster_diagnostics(diag,
-            title=f'Condition | {fset} | k-means diagnostics',
-            save_path=os.path.join(output_dir, f'clustering_diag_{pfx}.png'))
-        plot_embedding_scatter(emb_km, best_labels_km,
-            title=f'Condition | {fset} | k-means (k={best_k})',
-            save_path=os.path.join(output_dir, f'clustering_umap_{pfx}_kmeans.png'),
-            hue_labels=fly_lbls, hue_title='Fly')
-        plot_cluster_traces(traces, best_labels_km, mean_fps, stim_protocol, stim_time,
-            title=f'Condition | {fset} | k-means (k={best_k})',
-            save_path=os.path.join(output_dir, f'clustering_traces_{pfx}_kmeans.png'),
-            seg_window=_seg_window(fset), feature_subtitle=_subtitle(fset))
-
-        # ---- UMAP + HDBSCAN (comparison) -----------------------------------
-        emb_hdb, labels_hdb = run_umap_hdbscan(X)
-        plot_embedding_scatter(emb_hdb, labels_hdb,
-            title=f'Condition | {fset} | HDBSCAN',
-            save_path=os.path.join(output_dir, f'clustering_umap_{pfx}_hdbscan.png'),
-            hue_labels=fly_lbls, hue_title='Fly')
-        plot_cluster_traces(traces, labels_hdb, mean_fps, stim_protocol, stim_time,
-            title=f'Condition | {fset} | HDBSCAN',
-            save_path=os.path.join(output_dir, f'clustering_traces_{pfx}_hdbscan.png'),
-            seg_window=_seg_window(fset), feature_subtitle=_subtitle(fset))
 
     # ------------------------------------------------------------------ #
     # SCOPE 2: per-fly independent  (PCA visualisation + GMM clustering) #
@@ -2246,7 +2345,7 @@ def analyze_response_clustering(condition_rois, fly_rois, segments, mean_fps,
                 save_path=os.path.join(output_dir, f'clustering_gmm_diag_{pfx_f}.png'))
 
             # PCA for visualisation
-            emb_f, _, _, _ = run_pca_kmeans(X, range(best_k_f, best_k_f + 1))
+            emb_f = _pca_embed(X)
             plot_embedding_scatter(emb_f, gmm_lbl_f,
                 title=f'Fly {fly_id} | {fset} | GMM (k={best_k_f})',
                 save_path=os.path.join(output_dir, f'clustering_pca_gmm_{pfx_f}.png'))
@@ -2254,36 +2353,119 @@ def analyze_response_clustering(condition_rois, fly_rois, segments, mean_fps,
                 title=f'Fly {fly_id} | {fset} | GMM (k={best_k_f})',
                 save_path=os.path.join(output_dir, f'clustering_traces_gmm_{pfx_f}.png'),
                 seg_window=_seg_window(fset), feature_subtitle=_subtitle(fset))
+            _do_norm_f = (fset == 'spca')
             unique_gmm_f = sorted(set(gmm_lbl_f))
             min_len_f = min(len(t) for t in traces_f)
-            cmeans_f  = [np.mean([_norm_trace(traces_f[i][:min_len_f], mean_fps)
-                                  for i, l in enumerate(gmm_lbl_f) if l == c], axis=0)
+            cmeans_f  = [np.mean([
+                             _norm_trace(traces_f[i][:min_len_f], mean_fps) if _do_norm_f
+                             else traces_f[i][:min_len_f].astype(float)
+                             for i, l in enumerate(gmm_lbl_f) if l == c], axis=0)
                          for c in unique_gmm_f]
             plot_cluster_heatmap(traces_f, gmm_lbl_f, mean_fps,
                 title=f'Fly {fly_id} | {fset} | GMM heatmap',
                 save_path=os.path.join(output_dir, f'clustering_heatmap_gmm_{pfx_f}.png'),
-                cluster_means=cmeans_f if len(cmeans_f) > 1 else None)
+                cluster_means=cmeans_f if len(cmeans_f) > 1 else None,
+                normalize=_do_norm_f)
             plot_bootstrap_confusion(co_mat_f, gmm_lbl_f,
                 title=f'Fly {fly_id} | {fset} | Bootstrap co-assignment (k={best_k_f})',
                 save_path=os.path.join(output_dir, f'clustering_confusion_gmm_{pfx_f}.png'))
 
-            # PCA + k-means (comparison)
-            emb_km_f, best_lbl_f, bk_f, diag_f = run_pca_kmeans(X, k_range_km)
-            plot_cluster_diagnostics(diag_f,
-                title=f'Fly {fly_id} | {fset} | k-means diagnostics',
-                save_path=os.path.join(output_dir, f'clustering_diag_{pfx_f}.png'))
-            plot_embedding_scatter(emb_km_f, best_lbl_f,
-                title=f'Fly {fly_id} | {fset} | k-means (k={bk_f})',
-                save_path=os.path.join(output_dir, f'clustering_pca_{pfx_f}_kmeans.png'))
-            plot_cluster_traces(traces_f, best_lbl_f, mean_fps, stim_protocol, stim_time,
-                title=f'Fly {fly_id} | {fset} | k-means (k={bk_f})',
-                save_path=os.path.join(output_dir, f'clustering_traces_{pfx_f}_kmeans.png'),
-                seg_window=_seg_window(fset), feature_subtitle=_subtitle(fset))
-
     print("\n  Clustering analysis complete.")
 
 
-def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=None, output_dir='output_plots', xlims=None, qi_threshold=0.45):
+def plot_roi_repetitions(roi_accumulator, qi_pass, mean_fps,
+                         stim_protocol, stim_time, output_dir, ylim=None,
+                         seed=42):
+    """
+    For each fly, pick one random QI-passing ROI and plot all its TSeries
+    repetitions as faint individual traces + mean ± SEM, with the stimulus
+    protocol on top.  Layout mirrors the 1_tseries plots.
+
+    Saved as: 0_roi_repetitions_<fly_id>.png
+    (prefix 0_ so it sorts before the TSeries plots in the output folder)
+    """
+    print("\n" + "="*60)
+    print("Plotting ROI repetitions per fly ...")
+    rng = np.random.default_rng(seed)
+
+    for fly_id, roi_dict in roi_accumulator.items():
+        # Collect QI-passing ROI indices for this fly
+        passing = [ri for ri in roi_dict
+                   if qi_pass.get((fly_id, ri), False)]
+
+        if not passing:
+            print(f"  FlyID {fly_id}: no QI-passing ROIs, skipping")
+            continue
+
+        # Pick one at random
+        chosen_roi_idx = int(rng.choice(passing))
+        trace_list     = roi_dict[chosen_roi_idx]
+        n_reps         = len(trace_list)
+
+        # Align all repetitions to minimum length and stimulus length
+        stim_length = len(stim_protocol)
+        min_len = min(min(len(t) for t in trace_list), stim_length)
+        traces  = [t[:min_len] for t in trace_list]
+        time    = np.arange(min_len) / mean_fps
+
+        qi_val = compute_response_qi(trace_list)
+
+        fig = plt.figure(figsize=(16, 8))
+        gs  = fig.add_gridspec(2, 1, height_ratios=[1, 4], hspace=0.05)
+
+        max_time_r = max(time[-1], stim_time[-1])
+
+        # Stimulus panel
+        ax_stim = fig.add_subplot(gs[0])
+        ax_stim.fill_between(stim_time, 0, stim_protocol,
+                             color='lightblue', alpha=0.7, linewidth=0)
+        ax_stim.plot(stim_time, stim_protocol, color='blue', linewidth=1.5)
+        ax_stim.set_xlim(0, max_time_r)
+        ax_stim.set_ylim(-0.1, 1.1)
+        ax_stim.axis('off')
+        ax_stim.set_title(
+            f'FlyID: {fly_id}  |  ROI {chosen_roi_idx}  '
+            f'|  {n_reps} TSeries repetitions  |  QI = {qi_val:.3f}',
+            fontsize=14, fontweight='bold', pad=10)
+
+        # Trace panel
+        ax_trace = fig.add_subplot(gs[1])
+
+        # Faint individual repetitions — all light grey
+        for rep_idx, tr in enumerate(traces):
+            ax_trace.plot(time, tr, alpha=0.4, color='lightgray',
+                          linewidth=0.8, label=f'Rep {rep_idx + 1}' if rep_idx == 0 else '_nolegend_')
+
+        # Mean ± SEM across repetitions
+        mat       = np.vstack(traces)
+        mean_tr   = np.mean(mat, axis=0)
+        sem_tr    = np.std(mat,  axis=0) / np.sqrt(n_reps)
+        ax_trace.plot(time, mean_tr, color='black', linewidth=2.5,
+                      label=f'Mean (n={n_reps} reps)', zorder=5)
+        ax_trace.fill_between(time, mean_tr - sem_tr, mean_tr + sem_tr,
+                              color='black', alpha=0.15, zorder=4)
+
+        ax_trace.set_xlabel('Time (s)', fontsize=12)
+        ax_trace.set_ylabel('ΔF/F', fontsize=12)
+        ax_trace.legend(loc='upper right', fontsize=9, ncol=2)
+        ax_trace.grid(True, alpha=0.3)
+        if ylim is not None:
+            ax_trace.set_ylim(ylim[0], ylim[1])
+        ax_trace.axhline(y=0, color='black', linestyle='--',
+                         linewidth=0.8, alpha=0.4)
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir,
+                    f'0_roi_repetitions_{fly_id}.png'),
+                    dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"  FlyID {fly_id}: plotted ROI {chosen_roi_idx} "
+              f"({n_reps} reps, QI={qi_val:.3f})")
+
+    print("  ROI repetition plots complete.")
+
+
+def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=None, output_dir='output_plots', ylims=None, qi_threshold=0.45):
     """
     Process PKL file with fluorescence data and create hierarchical plots.
     
@@ -2467,7 +2649,7 @@ def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=No
             filtered_traces, time, stim_protocol, stim_time,
             f'TSeries: {tseries_key} | FlyID: {fly_id} | QI-filtered {n_filtered}/{n_total} ROIs',
             ylabel='ΔF/F',
-            xlim=xlims.get('full') if xlims else None
+            ylim=ylims.get('full') if ylims else None
         )
         plt.savefig(os.path.join(output_dir,
                     f'1_tseries_{ts_idx:03d}_{tseries_key}.png'),
@@ -2508,6 +2690,24 @@ def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=No
               f"{len(next(iter(roi_dict.values())))} TSeries replicates")
     print(f"  Total ROIs for clustering: {len(condition_rois)}")
 
+    # ---- Plot one random QI-passing ROI per fly over all repetitions -------
+    plot_roi_repetitions(
+        roi_accumulator, qi_pass, mean_fps,
+        stim_protocol, stim_time, output_dir,
+        ylim=ylims.get('full') if ylims else None)
+
+    # ---- Segment the replicate-averaged ROI traces for plot 5a -------------
+    # roi_segments[seg_name] = list of (seg_trace, seg_time)
+    # one entry per QI-passing ROI — used for the individual-ROI global plot
+    roi_segments = {seg: [] for seg in segment_names}
+    for avg_trace, fly_id_r, roi_key in condition_rois:
+        seg_result = segment_trace(avg_trace,
+                                   np.arange(len(avg_trace)) / mean_fps,
+                                   segments, mean_fps)
+        for seg_name, (seg_tr, seg_t) in seg_result.items():
+            if len(seg_tr) > 0:
+                roi_segments[seg_name].append((seg_tr, seg_t))
+
     # Plot 2: Averages per FlyID
     print("\n" + "="*60)
     print("Creating FlyID-level plots...")
@@ -2529,7 +2729,7 @@ def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=No
             stim_time,
             f'FlyID: {fly_id} | Average across {len(aligned_traces)} TSeries',
             ylabel='ΔF/F',
-            xlim=xlims.get('full') if xlims else None
+            ylim=ylims.get('full') if ylims else None
         )
         plt.savefig(os.path.join(output_dir, f'2_fly_{fly_id}.png'), 
                     dpi=150, bbox_inches='tight')
@@ -2552,7 +2752,7 @@ def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=No
         stim_time,
         f'Global Average | All {len(all_traces)} TSeries from {len(fly_means)} Flies',
         ylabel='ΔF/F',
-        xlim=xlims.get('full') if xlims else None
+        ylim=ylims.get('full') if ylims else None
     )
     plt.savefig(os.path.join(output_dir, f'3_global_average.png'), 
                 dpi=150, bbox_inches='tight')
@@ -2584,7 +2784,7 @@ def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=No
             seg_stim_end_idx = len(stim_protocol)
         seg_stim = stim_protocol[seg_stim_start_idx:seg_stim_end_idx]
         seg_stim_time = np.arange(len(seg_stim)) / mean_fps
-        seg_xlim = xlims.get(seg_name) if xlims else None
+        seg_ylim = ylims.get(seg_name) if ylims else None
 
         # Average per fly
         for fly_id, traces_and_times in fly_segments[seg_name].items():
@@ -2603,7 +2803,7 @@ def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=No
                 seg_stim_time,
                 f'{seg_name.upper()} | FlyID: {fly_id} | {len(aligned_traces)} TSeries',
                 ylabel='ΔF/F',
-                xlim=seg_xlim
+                ylim=seg_ylim
             )
             plt.savefig(os.path.join(output_dir, f'4_{seg_name}_fly_{fly_id}.png'), 
                         dpi=150, bbox_inches='tight')
@@ -2616,23 +2816,50 @@ def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=No
         
         global_mean = np.mean(all_traces, axis=0)
         segment_results[seg_name]['global_average'] = (global_mean, common_time)
-        
-        # Plot global average for this segment
-        fig, _ = plot_traces_with_mean(
-            all_traces,
-            common_time,
-            seg_stim,
-            seg_stim_time,
-            f'{seg_name.upper()} | Global Average | {len(all_traces)} TSeries',
-            ylabel='ΔF/F',
-            xlim=seg_xlim
-        )
-        plt.savefig(os.path.join(output_dir, f'5_{seg_name}_global.png'), 
-                    dpi=150, bbox_inches='tight')
-        plt.close()
-        
+
+        # ── Plot 5a: individual QI-filtered replicate-averaged ROIs + global mean ──
+        if roi_segments[seg_name]:
+            roi_min_len = min(len(tr) for tr, _ in roi_segments[seg_name])
+            roi_traces  = [tr[:roi_min_len] for tr, _ in roi_segments[seg_name]]
+            roi_time    = roi_segments[seg_name][0][1][:roi_min_len]
+            fig, _ = plot_traces_with_mean(
+                roi_traces, roi_time,
+                seg_stim, seg_stim_time,
+                f'{seg_name.upper()} | All ROIs (QI-filtered, rep.-avg.) '
+                f'| n={len(roi_traces)} ROIs',
+                ylabel='ΔF/F', ylim=seg_ylim
+            )
+            plt.savefig(os.path.join(output_dir,
+                        f'5a_{seg_name}_global_rois.png'),
+                        dpi=150, bbox_inches='tight')
+            plt.close()
+
+        # ── Plot 5b: per-fly averages + global mean from fly averages ─────────
+        fly_avg_traces = []
+        fly_avg_time   = None
+        for fly_id_p, (fly_mean_tr, fly_mean_t) in \
+                segment_results[seg_name]['fly_averages'].items():
+            fly_avg_traces.append(fly_mean_tr)
+            fly_avg_time = fly_mean_t
+
+        if fly_avg_traces and fly_avg_time is not None:
+            fly_min_len   = min(len(t) for t in fly_avg_traces)
+            fly_avg_traces_aligned = [t[:fly_min_len] for t in fly_avg_traces]
+            fly_avg_time_aligned   = fly_avg_time[:fly_min_len]
+            fig, _ = plot_traces_with_mean(
+                fly_avg_traces_aligned, fly_avg_time_aligned,
+                seg_stim, seg_stim_time,
+                f'{seg_name.upper()} | Per-fly averages '
+                f'| n={len(fly_avg_traces_aligned)} flies',
+                ylabel='ΔF/F', ylim=seg_ylim
+            )
+            plt.savefig(os.path.join(output_dir,
+                        f'5b_{seg_name}_global_flies.png'),
+                        dpi=150, bbox_inches='tight')
+            plt.close()
+
         print(f"  - {len(fly_segments[seg_name])} fly plots")
-        print(f"  - 1 global plot")
+        print(f"  - 2 global plots (5a: ROI-level, 5b: fly-level)")
     
     # Analyze luminance responses
     luminance_results = analyze_luminance_response(segment_results, fly_segments, mean_fps, output_dir)
@@ -3338,27 +3565,28 @@ if __name__ == "__main__":
     # Keys: 'full', 'polarity', 'frequency', 'contrast', 'luminance'
     # Value: (xmin, xmax) in seconds, or None for auto.
     # ---------------------------------------------------------------
-    xlims_list = [
+
+    ylims_list = [
         # _Tm1
-        {'full': None, 'polarity': None, 'frequency': None, 'contrast': None, 'luminance': None},
+        {'full': [-0.75, 3.5], 'polarity': [-0.75, 3.5], 'frequency': [-0.75, 1.75], 'contrast': [-0.75, 3.5], 'luminance': [-0.75, 3]},
         # _Tm4
-        {'full': None, 'polarity': None, 'frequency': None, 'contrast': None, 'luminance': None},
+        {'full': [-4.5, 6], 'polarity': [-4.5, 6.5], 'frequency': [-4, 3.5], 'contrast': [-4, 3.5], 'luminance': [-4.5, 3.5]},
         # _Tm9
-        {'full': None, 'polarity': None, 'frequency': None, 'contrast': None, 'luminance': None},
+        {'full': [-1.5, 2.5], 'polarity': [-1, 2.75], 'frequency': [-1.2, 1.5], 'contrast': [-1.2, 1.25], 'luminance': [-1, 2]},
         # _Mi1
-        {'full': None, 'polarity': None, 'frequency': None, 'contrast': None, 'luminance': None},
+        {'full': [-2, 3], 'polarity': [-2, 3], 'frequency': [-0.75, 1.75], 'contrast': [-0.7, 1.5], 'luminance': [-2.5, 2.5]},
         # _Mi4
-        {'full': None, 'polarity': None, 'frequency': None, 'contrast': None, 'luminance': None},
+        {'full': [-1.5, 2.25], 'polarity': [-1.5, 2.25], 'frequency': [-0.75, 1.5], 'contrast': [-0.5, 1.75], 'luminance': [-1.25, 1.5]},
         # _Mi9
-        {'full': None, 'polarity': None, 'frequency': None, 'contrast': None, 'luminance': None},
+        {'full': [-1.5, 3.5], 'polarity': [-3, 3], 'frequency': [-1, 1.25], 'contrast': [-1, 0.75], 'luminance': [-1, 1.6]},
     ]
     # Pad with None-dicts if xlims_list is shorter than pkl_files
-    _empty_xlims = {'full': None, 'polarity': None, 'frequency': None, 'contrast': None, 'luminance': None}
-    while len(xlims_list) < len(pkl_files):
-        xlims_list.append(_empty_xlims.copy())
+    _empty_ylims = {'full': None, 'polarity': None, 'frequency': None, 'contrast': None, 'luminance': None}
+    while len(ylims_list) < len(pkl_files):
+        ylims_list.append(_empty_ylims.copy())
 
     all_results = []
-    for PKL_FILE, xlims in zip(pkl_files, xlims_list):
+    for PKL_FILE, ylims in zip(pkl_files, ylims_list):
         folder = PKL_FILE.split('\\')[-1].split('.')[0]
         if multi:
             metadata = pd.read_excel("D:/Christian/02_twophoton/metadata.xlsx", sheet_name='251023_tdc2_cschr_pan')
@@ -3382,7 +3610,7 @@ if __name__ == "__main__":
             TARGET_FPS,
             original_fps=ORIGINAL_FPS,
             output_dir=output_dir,
-            xlims=xlims,
+            ylims=ylims,
             qi_threshold=0.45,
         )
         # Store results
@@ -3407,3 +3635,5 @@ if __name__ == "__main__":
     os.makedirs(combined_output, exist_ok=True)
     plot_combined_analysis(all_results, pkl_files, combined_output)
     print("\nDone!")
+
+

@@ -199,6 +199,7 @@ def plot_traces_with_mean(traces, time, stim_protocol, stim_time, title, ylabel=
     ax_trace.set_ylabel(ylabel, fontsize=12)
     ax_trace.legend(loc='upper right')
     ax_trace.grid(True, alpha=0.3)
+    ax_trace.set_xlim(0, max_time)
     if ylim is not None:
         ax_trace.set_ylim(ylim[0], ylim[1])
     
@@ -1554,7 +1555,7 @@ def plot_embedding_scatter(embedding, labels, title, save_path,
 
 def plot_cluster_traces(traces, labels, mean_fps, stim_protocol, stim_time,
                         title, save_path,
-                        seg_window=None, feature_subtitle=None):
+                        seg_window=None, feature_subtitle=None, ylim=None):
     """
     For each cluster: plot faint individual traces + mean ± SEM, stimulus on top.
 
@@ -1633,6 +1634,8 @@ def plot_cluster_traces(traces, labels, mean_fps, stim_protocol, stim_time,
         ax_trace.set_xlim(0, max(time[-1], max_stim_time))
         ax_trace.grid(True, alpha=0.3)
         ax_trace.axhline(y=0, color='black', linestyle='--', linewidth=0.8, alpha=0.5)
+        if ylim is not None:
+            ax_trace.set_ylim(ylim[0], ylim[1])
 
     # Main title + optional feature subtitle
     full_title = title
@@ -2182,7 +2185,8 @@ def plot_bootstrap_confusion(co_assign_mat, labels, title, save_path):
 def analyze_response_clustering(condition_rois, fly_rois, segments, mean_fps,
                                  stim_protocol, stim_time, output_dir,
                                  polarity_results=None, luminance_results=None,
-                                 contrast_results=None, frequency_results=None):
+                                 contrast_results=None, frequency_results=None,
+                                 ylims=None):
     """
     Orchestrate all three clustering scopes × feature sets.
     Primary method: GMM + BIC (Baden et al. 2016).
@@ -2254,6 +2258,15 @@ def analyze_response_clustering(condition_rois, fly_rois, segments, mean_fps,
             return f'{_feat_seg_subtitle}  |  segment: {fset.split("_",1)[1]}'
         return None
 
+    def _ylim(fset):
+        """Return the appropriate ylim tuple for this feature set, or None."""
+        if ylims is None:
+            return None
+        if fset.startswith('segment_') or (fset.startswith('features_') and fset != 'features'):
+            seg_name = fset.split('_', 1)[1]
+            return ylims.get(seg_name)
+        return ylims.get('full')
+
     # ------------------------------------------------------------------ #
     # SCOPE 1 & 3: per-condition  (UMAP visualisation + GMM clustering)  #
     # ------------------------------------------------------------------ #
@@ -2295,7 +2308,8 @@ def analyze_response_clustering(condition_rois, fly_rois, segments, mean_fps,
         plot_cluster_traces(traces, gmm_labels, mean_fps, stim_protocol, stim_time,
             title=f'Condition | {fset} | GMM (k={best_k_gmm})',
             save_path=os.path.join(output_dir, f'clustering_traces_gmm_{pfx}.png'),
-            seg_window=_seg_window(fset), feature_subtitle=_subtitle(fset))
+            seg_window=_seg_window(fset), feature_subtitle=_subtitle(fset),
+            ylim=_ylim(fset))
 
         # Cluster means for dendrogram: use same representation as heatmap
         _do_norm = (fset == 'spca')
@@ -2322,53 +2336,55 @@ def analyze_response_clustering(condition_rois, fly_rois, segments, mean_fps,
 
     # ------------------------------------------------------------------ #
     # SCOPE 2: per-fly independent  (PCA visualisation + GMM clustering) #
+    # (commented out — re-enable to run per-fly clustering)              #
     # ------------------------------------------------------------------ #
-    print("\n  Scope: per-fly")
-    for fly_id, roi_list in fly_rois.items():
-        print(f"    Fly: {fly_id}  ({len(roi_list)} ROIs)")
-        for fset in feature_sets:
-            X, fly_lbls_f, _, traces_f, _ = prepare_clustering_data(
-                roi_list, fset, segments, mean_fps,
-                polarity_results, luminance_results, contrast_results, frequency_results)
-
-            if X is None or len(X) < 4:
-                continue
-
-            pfx_f = f'fly{fly_id}_{fset}'
-
-            # GMM + BIC
-            gmm_lbl_f, best_k_f, post_f, gmm_diag_f = run_gmm_bic(X, range(2, min(9, len(X))))
-            dp_f, ul_f = compute_dprime_matrix(X, gmm_lbl_f)
-            boot_corrs_f, co_mat_f = validate_cluster_stability(X, best_k_f)
-            plot_gmm_diagnostics(gmm_diag_f, dp_f, ul_f, boot_corrs_f,
-                title=f'Fly {fly_id} | {fset} | GMM diagnostics',
-                save_path=os.path.join(output_dir, f'clustering_gmm_diag_{pfx_f}.png'))
-
-            # PCA for visualisation
-            emb_f = _pca_embed(X)
-            plot_embedding_scatter(emb_f, gmm_lbl_f,
-                title=f'Fly {fly_id} | {fset} | GMM (k={best_k_f})',
-                save_path=os.path.join(output_dir, f'clustering_pca_gmm_{pfx_f}.png'))
-            plot_cluster_traces(traces_f, gmm_lbl_f, mean_fps, stim_protocol, stim_time,
-                title=f'Fly {fly_id} | {fset} | GMM (k={best_k_f})',
-                save_path=os.path.join(output_dir, f'clustering_traces_gmm_{pfx_f}.png'),
-                seg_window=_seg_window(fset), feature_subtitle=_subtitle(fset))
-            _do_norm_f = (fset == 'spca')
-            unique_gmm_f = sorted(set(gmm_lbl_f))
-            min_len_f = min(len(t) for t in traces_f)
-            cmeans_f  = [np.mean([
-                             _norm_trace(traces_f[i][:min_len_f], mean_fps) if _do_norm_f
-                             else traces_f[i][:min_len_f].astype(float)
-                             for i, l in enumerate(gmm_lbl_f) if l == c], axis=0)
-                         for c in unique_gmm_f]
-            plot_cluster_heatmap(traces_f, gmm_lbl_f, mean_fps,
-                title=f'Fly {fly_id} | {fset} | GMM heatmap',
-                save_path=os.path.join(output_dir, f'clustering_heatmap_gmm_{pfx_f}.png'),
-                cluster_means=cmeans_f if len(cmeans_f) > 1 else None,
-                normalize=_do_norm_f)
-            plot_bootstrap_confusion(co_mat_f, gmm_lbl_f,
-                title=f'Fly {fly_id} | {fset} | Bootstrap co-assignment (k={best_k_f})',
-                save_path=os.path.join(output_dir, f'clustering_confusion_gmm_{pfx_f}.png'))
+    # print("\n  Scope: per-fly")
+    # for fly_id, roi_list in fly_rois.items():
+    #     print(f"    Fly: {fly_id}  ({len(roi_list)} ROIs)")
+    #     for fset in feature_sets:
+    #         X, fly_lbls_f, _, traces_f, _ = prepare_clustering_data(
+    #             roi_list, fset, segments, mean_fps,
+    #             polarity_results, luminance_results, contrast_results, frequency_results)
+    #
+    #         if X is None or len(X) < 4:
+    #             continue
+    #
+    #         pfx_f = f'fly{fly_id}_{fset}'
+    #
+    #         # GMM + BIC
+    #         gmm_lbl_f, best_k_f, post_f, gmm_diag_f = run_gmm_bic(X, range(2, min(9, len(X))))
+    #         dp_f, ul_f = compute_dprime_matrix(X, gmm_lbl_f)
+    #         boot_corrs_f, co_mat_f = validate_cluster_stability(X, best_k_f)
+    #         plot_gmm_diagnostics(gmm_diag_f, dp_f, ul_f, boot_corrs_f,
+    #             title=f'Fly {fly_id} | {fset} | GMM diagnostics',
+    #             save_path=os.path.join(output_dir, f'clustering_gmm_diag_{pfx_f}.png'))
+    #
+    #         # PCA for visualisation
+    #         emb_f = _pca_embed(X)
+    #         plot_embedding_scatter(emb_f, gmm_lbl_f,
+    #             title=f'Fly {fly_id} | {fset} | GMM (k={best_k_f})',
+    #             save_path=os.path.join(output_dir, f'clustering_pca_gmm_{pfx_f}.png'))
+    #         plot_cluster_traces(traces_f, gmm_lbl_f, mean_fps, stim_protocol, stim_time,
+    #             title=f'Fly {fly_id} | {fset} | GMM (k={best_k_f})',
+    #             save_path=os.path.join(output_dir, f'clustering_traces_gmm_{pfx_f}.png'),
+    #             seg_window=_seg_window(fset), feature_subtitle=_subtitle(fset),
+    #             ylim=_ylim(fset))
+    #         _do_norm_f = (fset == 'spca')
+    #         unique_gmm_f = sorted(set(gmm_lbl_f))
+    #         min_len_f = min(len(t) for t in traces_f)
+    #         cmeans_f  = [np.mean([
+    #                          _norm_trace(traces_f[i][:min_len_f], mean_fps) if _do_norm_f
+    #                          else traces_f[i][:min_len_f].astype(float)
+    #                          for i, l in enumerate(gmm_lbl_f) if l == c], axis=0)
+    #                      for c in unique_gmm_f]
+    #         plot_cluster_heatmap(traces_f, gmm_lbl_f, mean_fps,
+    #             title=f'Fly {fly_id} | {fset} | GMM heatmap',
+    #             save_path=os.path.join(output_dir, f'clustering_heatmap_gmm_{pfx_f}.png'),
+    #             cluster_means=cmeans_f if len(cmeans_f) > 1 else None,
+    #             normalize=_do_norm_f)
+    #         plot_bootstrap_confusion(co_mat_f, gmm_lbl_f,
+    #             title=f'Fly {fly_id} | {fset} | Bootstrap co-assignment (k={best_k_f})',
+    #             save_path=os.path.join(output_dir, f'clustering_confusion_gmm_{pfx_f}.png'))
 
     print("\n  Clustering analysis complete.")
 
@@ -2449,6 +2465,7 @@ def plot_roi_repetitions(roi_accumulator, qi_pass, mean_fps,
         ax_trace.set_ylabel('ΔF/F', fontsize=12)
         ax_trace.legend(loc='upper right', fontsize=9, ncol=2)
         ax_trace.grid(True, alpha=0.3)
+        ax_trace.set_xlim(0, max_time_r)
         if ylim is not None:
             ax_trace.set_ylim(ylim[0], ylim[1])
         ax_trace.axhline(y=0, color='black', linestyle='--',
@@ -2883,7 +2900,8 @@ def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=No
         polarity_results=polarity_results,
         luminance_results=luminance_results,
         contrast_results=contrast_results,
-        frequency_results=frequency_results)
+        frequency_results=frequency_results,
+        ylims=ylims)
 
     return tseries_means, fly_averaged_traces, global_mean, segment_results, luminance_results, polarity_results, contrast_results, frequency_results, variability_results, across_fly_variability, condition_rois, mean_fps
 
@@ -3565,7 +3583,6 @@ if __name__ == "__main__":
     # Keys: 'full', 'polarity', 'frequency', 'contrast', 'luminance'
     # Value: (xmin, xmax) in seconds, or None for auto.
     # ---------------------------------------------------------------
-
     ylims_list = [
         # _Tm1
         {'full': [-0.75, 3.5], 'polarity': [-0.75, 3.5], 'frequency': [-0.75, 1.75], 'contrast': [-0.75, 3.5], 'luminance': [-0.75, 3]},
@@ -3635,5 +3652,3 @@ if __name__ == "__main__":
     os.makedirs(combined_output, exist_ok=True)
     plot_combined_analysis(all_results, pkl_files, combined_output)
     print("\nDone!")
-
-

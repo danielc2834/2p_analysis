@@ -1659,6 +1659,13 @@ def _norm_trace(trace, mean_fps, baseline_s=0.5):
     return delta / m if m > 0 else delta
 
 
+def _zscore_trace(trace):
+    """Z-score a trace: subtract mean, divide by std. std=0 → return zeros."""
+    t = trace.astype(float)
+    s = t.std()
+    return (t - t.mean()) / s if s > 0 else np.zeros_like(t)
+
+
 def compute_response_qi(trace_list):
     """
     Signal-to-noise quality index across trial repetitions (Baden et al. 2016).
@@ -1983,12 +1990,13 @@ def plot_cluster_heatmap(traces, labels, mean_fps, title, save_path,
 
     Parameters
     ----------
-    normalize : bool
-        If False (default): show raw ΔF/F — amplitude variation is preserved,
-        consistent with feature clustering where amplitude features (peak, trough,
-        AUC) were used.
-        If True: normalise each ROI to its peak (max|ΔF/F|=1) — appropriate
-        only for the 'spca' feature set where sPCA was fit on normalised traces.
+    normalize : False | True | 'zscore'
+        False     — raw ΔF/F (amplitude preserved; default for all feature sets)
+        True      — peak-normalised to max|ΔF/F|=1 (used for 'spca' feature set)
+        'zscore'  — z-scored per ROI (mean=0, std=1; shape-only, same as tSNE papers)
+    cluster_means : list of arrays or None
+        Pre-computed cluster mean traces in the same representation as the heatmap.
+        If provided, a dendrogram is drawn to the right.
     """
     unique_clusters = sorted(set(labels))
     plot_clusters   = [c for c in unique_clusters if c != -1]
@@ -2005,13 +2013,23 @@ def plot_cluster_heatmap(traces, labels, mean_fps, title, save_path,
         sorted_idx.extend(idx)
         boundaries.append(len(sorted_idx))
 
-    mat  = np.vstack([
-        _norm_trace(traces[i][:min_len], mean_fps) if normalize
-        else traces[i][:min_len].astype(float)
-        for i in sorted_idx
-    ])
+    def _apply_norm(trace):
+        if normalize == 'zscore':
+            return _zscore_trace(trace)
+        elif normalize:
+            return _norm_trace(trace, mean_fps)
+        else:
+            return trace.astype(float)
+
+    mat  = np.vstack([_apply_norm(traces[i][:min_len]) for i in sorted_idx])
     vmax = float(np.percentile(np.abs(mat), 95))
-    cbar_label = 'ΔF/F (norm. to peak)' if normalize else 'ΔF/F'
+
+    if normalize == 'zscore':
+        cbar_label = 'Z-score'
+    elif normalize:
+        cbar_label = 'ΔF/F (norm. to peak)'
+    else:
+        cbar_label = 'ΔF/F'
 
     # ── layout: heatmap + optional dendrogram ────────────────────────────
     has_dend  = cluster_means is not None and len(cluster_means) > 1
@@ -2321,12 +2339,24 @@ def analyze_response_clustering(condition_rois, fly_rois, segments, mean_fps,
                        for i, l in enumerate(gmm_labels) if l == c], axis=0)
                    for c in unique_gmm]
 
-        # Heatmap sorted by GMM cluster — dendrogram embedded on the right
+        # Z-scored cluster means for the z-score heatmap dendrogram
+        cmeans_z = [np.mean([_zscore_trace(traces[i][:min_len])
+                             for i, l in enumerate(gmm_labels) if l == c], axis=0)
+                    for c in unique_gmm]
+
+        # Heatmap 1: raw ΔF/F (amplitude preserved) / peak-norm for spca
         plot_cluster_heatmap(traces, gmm_labels, mean_fps,
             title=f'Condition | {fset} | GMM heatmap (k={best_k_gmm})',
             save_path=os.path.join(output_dir, f'clustering_heatmap_gmm_{pfx}.png'),
             cluster_means=cmeans if len(cmeans) > 1 else None,
             normalize=_do_norm)
+
+        # Heatmap 2: z-scored traces — shape only, amplitude removed
+        plot_cluster_heatmap(traces, gmm_labels, mean_fps,
+            title=f'Condition | {fset} | GMM heatmap Z-scored (k={best_k_gmm})',
+            save_path=os.path.join(output_dir, f'clustering_heatmap_gmm_{pfx}_zscore.png'),
+            cluster_means=cmeans_z if len(cmeans_z) > 1 else None,
+            normalize='zscore')
 
         # Bootstrap co-assignment confusion matrix
         plot_bootstrap_confusion(co_mat, gmm_labels,
@@ -2377,11 +2407,19 @@ def analyze_response_clustering(condition_rois, fly_rois, segments, mean_fps,
     #                          else traces_f[i][:min_len_f].astype(float)
     #                          for i, l in enumerate(gmm_lbl_f) if l == c], axis=0)
     #                      for c in unique_gmm_f]
+    #         cmeans_fz = [np.mean([_zscore_trace(traces_f[i][:min_len_f])
+    #                               for i, l in enumerate(gmm_lbl_f) if l == c], axis=0)
+    #                      for c in unique_gmm_f]
     #         plot_cluster_heatmap(traces_f, gmm_lbl_f, mean_fps,
     #             title=f'Fly {fly_id} | {fset} | GMM heatmap',
     #             save_path=os.path.join(output_dir, f'clustering_heatmap_gmm_{pfx_f}.png'),
     #             cluster_means=cmeans_f if len(cmeans_f) > 1 else None,
     #             normalize=_do_norm_f)
+    #         plot_cluster_heatmap(traces_f, gmm_lbl_f, mean_fps,
+    #             title=f'Fly {fly_id} | {fset} | GMM heatmap Z-scored',
+    #             save_path=os.path.join(output_dir, f'clustering_heatmap_gmm_{pfx_f}_zscore.png'),
+    #             cluster_means=cmeans_fz if len(cmeans_fz) > 1 else None,
+    #             normalize='zscore')
     #         plot_bootstrap_confusion(co_mat_f, gmm_lbl_f,
     #             title=f'Fly {fly_id} | {fset} | Bootstrap co-assignment (k={best_k_f})',
     #             save_path=os.path.join(output_dir, f'clustering_confusion_gmm_{pfx_f}.png'))

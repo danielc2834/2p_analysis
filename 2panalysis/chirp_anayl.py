@@ -6,15 +6,10 @@ from scipy.interpolate import interp1d
 from scipy.signal import butter, filtfilt
 from scipy.spatial.distance import squareform
 from scipy.cluster.hierarchy import linkage, dendrogram as sp_dendrogram
-from scipy.signal import butter, filtfilt
-from scipy.spatial.distance import squareform
-from scipy.cluster.hierarchy import linkage, dendrogram as sp_dendrogram
 from collections import defaultdict
 import os
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
-from sklearn.decomposition import PCA, SparsePCA
-from sklearn.mixture import GaussianMixture
 from sklearn.decomposition import PCA, SparsePCA
 from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import StandardScaler
@@ -85,14 +80,7 @@ def segment_trace(trace, time, segments, mean_fps):
     """
     segmented = {}
     n = len(trace)
-    n = len(trace)
     for name, (start, end) in segments.items():
-        start_idx = min(int(start * mean_fps), n - 1)
-        end_idx   = min(int(end   * mean_fps), n)
-        if start_idx >= end_idx:
-            # segment falls outside trace — return empty arrays
-            segmented[name] = (np.array([]), np.array([]))
-            continue
         start_idx = min(int(start * mean_fps), n - 1)
         end_idx   = min(int(end   * mean_fps), n)
         if start_idx >= end_idx:
@@ -106,7 +94,6 @@ def segment_trace(trace, time, segments, mean_fps):
     
     return segmented
 
-def interpolate_trace(df_trace, original_fps, target_fps, trim_seconds=5, detrend=False):
 def interpolate_trace(df_trace, original_fps, target_fps, trim_seconds=5, detrend=False):
     """
     Interpolate df_trace to target FPS using linear interpolation and trim edges.
@@ -159,7 +146,6 @@ def interpolate_trace(df_trace, original_fps, target_fps, trim_seconds=5, detren
     return interpolated_trace, new_time
 
 def plot_traces_with_mean(traces, time, stim_protocol, stim_time, title, ylabel='ΔF/F', alpha=0.3, xlim=None):
-def plot_traces_with_mean(traces, time, stim_protocol, stim_time, title, ylabel='ΔF/F', alpha=0.3, xlim=None):
     """
     Plot individual traces and their mean with stimulus protocol on top.
     
@@ -186,11 +172,7 @@ def plot_traces_with_mean(traces, time, stim_protocol, stim_time, title, ylabel=
     gs = fig.add_gridspec(2, 1, height_ratios=[1, 4], hspace=0.05)
     
     # Determine x-axis limits
-    # Determine x-axis limits
     max_time = max(time[-1], stim_time[-1])
-    x_min = xlim[0] if xlim is not None else 0
-    x_max = xlim[1] if xlim is not None else max_time
-
     x_min = xlim[0] if xlim is not None else 0
     x_max = xlim[1] if xlim is not None else max_time
 
@@ -198,7 +180,6 @@ def plot_traces_with_mean(traces, time, stim_protocol, stim_time, title, ylabel=
     ax_stim = fig.add_subplot(gs[0])
     ax_stim.fill_between(stim_time, 0, stim_protocol, color='lightblue', alpha=0.7, linewidth=0)
     ax_stim.plot(stim_time, stim_protocol, color='blue', linewidth=1.5)
-    ax_stim.set_xlim(x_min, x_max)
     ax_stim.set_xlim(x_min, x_max)
     ax_stim.set_ylim(-0.1, 1.1)
     ax_stim.axis('off')
@@ -223,7 +204,6 @@ def plot_traces_with_mean(traces, time, stim_protocol, stim_time, title, ylabel=
     ax_trace.set_ylabel(ylabel, fontsize=12)
     ax_trace.legend(loc='upper right')
     ax_trace.grid(True, alpha=0.3)
-    ax_trace.set_xlim(x_min, x_max)
     ax_trace.set_xlim(x_min, x_max)
     
     plt.tight_layout()
@@ -1231,52 +1211,6 @@ def extract_roi_features(trace, time, segments, mean_fps,
         cont_idx = 0.0
     features.append(cont_idx); names.append('contrast_index')
 
-    # --- Stimulus-locked response indices (Baden et al. 2016 style) ----------
-    # ON-OFF polarity index from polarity segment: (ON - OFF) / (ON + OFF)
-    pol_start, pol_end = segments.get('polarity', (0, 14))
-    i0p = int(pol_start * mean_fps); i1p = min(int(pol_end * mean_fps), len(trace))
-    pol_seg = trace[i0p:i1p]
-    # ON window: 6-8 s into polarity segment; OFF window: 9-11 s
-    on_w_s,  on_w_e  = int(6*mean_fps), int(8*mean_fps)
-    off_w_s, off_w_e = int(9*mean_fps), int(11*mean_fps)
-    if off_w_e <= len(pol_seg):
-        mean_on  = float(np.mean(pol_seg[on_w_s:on_w_e]))
-        mean_off = float(np.mean(pol_seg[off_w_s:off_w_e]))
-        denom = abs(mean_on) + abs(mean_off)
-        oo_idx = (mean_on - mean_off) / denom if denom > 0 else 0.0
-    else:
-        oo_idx = 0.0
-    features.append(oo_idx); names.append('on_off_index')
-
-    # Frequency index: (high-freq response - low-freq response) / sum
-    # Use middle vs. start of frequency segment as proxy for high vs low freq
-    freq_start, freq_end = segments.get('frequency', (14, 25))
-    i0f = int(freq_start * mean_fps); i1f = min(int(freq_end * mean_fps), len(trace))
-    freq_seg = trace[i0f:i1f]
-    n_freq = len(freq_seg)
-    if n_freq > 4:
-        f_lo = float(np.mean(freq_seg[:n_freq//2]))
-        f_hi = float(np.mean(freq_seg[n_freq//2:]))
-        denom = abs(f_lo) + abs(f_hi)
-        freq_idx = (f_hi - f_lo) / denom if denom > 0 else 0.0
-    else:
-        freq_idx = 0.0
-    features.append(freq_idx); names.append('freq_index')
-
-    # Contrast index: (high-contrast response - low-contrast response) / sum
-    cont_start, cont_end = segments.get('contrast', (25, 35))
-    i0c = int(cont_start * mean_fps); i1c = min(int(cont_end * mean_fps), len(trace))
-    cont_seg = trace[i0c:i1c]
-    n_cont = len(cont_seg)
-    if n_cont > 4:
-        c_lo = float(np.mean(cont_seg[:n_cont//2]))
-        c_hi = float(np.mean(cont_seg[n_cont//2:]))
-        denom = abs(c_lo) + abs(c_hi)
-        cont_idx = (c_hi - c_lo) / denom if denom > 0 else 0.0
-    else:
-        cont_idx = 0.0
-    features.append(cont_idx); names.append('contrast_index')
-
     return np.array(features, dtype=float), names
 
 
@@ -1421,78 +1355,10 @@ def prepare_clustering_data(roi_list, feature_set, segments, mean_fps,
             fly_labels  = [fly_labels[k]  for k in keep]
             tseries_labels = [tseries_labels[k] for k in keep]
 
-    elif feature_set.startswith('features_'):
-        seg_name = feature_set.split('_', 1)[1]
-        t_start, t_end = segments[seg_name]
-        i0 = int(t_start * mean_fps)
-        i1 = int(t_end   * mean_fps)
-        for i, (trace, fly_id, ts_key) in enumerate(roi_list):
-            seg = trace[i0:min(i1, len(trace))]
-            if len(seg) == 0:
-                continue
-            bl_frames = max(1, int(0.5 * mean_fps))
-            baseline  = np.mean(seg[:bl_frames])
-            delta     = seg - baseline
-            peak      = float(np.max(delta))
-            trough    = float(np.min(delta))
-            auc       = float(np.trapz(np.abs(delta)))
-            peak_lat  = float(np.argmax(delta)) / mean_fps
-            if peak > 0:
-                thresh10 = 0.10 * peak
-                thresh90 = 0.90 * peak
-                above10  = np.where(delta >= thresh10)[0]
-                above90  = np.where(delta >= thresh90)[0]
-                rise = (above90[0] - above10[0]) / mean_fps if (len(above10) > 0 and len(above90) > 0) else 0.0
-            else:
-                rise = 0.0
-            row = np.array([peak, trough, auc, peak_lat, rise], dtype=float)
-            if not np.all(np.isfinite(row)):
-                continue
-            X_rows.append(row)
-            traces_out.append(trace)
-            fly_labels.append(fly_id)
-            tseries_labels.append(ts_key)
-            valid_idx.append(i)
-
-    elif feature_set == 'spca':
-        # Sparse PCA on normalized full traces (Baden et al. 2016)
-        all_tr = [r[0] for r in roi_list]
-        min_len = min(len(t) for t in all_tr)
-        normed  = []
-        for trace, fly_id, ts_key in roi_list:
-            n = _norm_trace(trace[:min_len], mean_fps)
-            normed.append(n)
-            traces_out.append(trace)
-            fly_labels.append(fly_id)
-            tseries_labels.append(ts_key)
-        X_norm = np.vstack(normed)
-        n_comp = min(20, X_norm.shape[0] - 1, X_norm.shape[1])
-        print(f"      Fitting SparsePCA (n={X_norm.shape[0]} ROIs × {X_norm.shape[1]} frames) ...")
-        spca = SparsePCA(n_components=n_comp, alpha=1.0, max_iter=200,
-                         n_jobs=-1, random_state=42)
-        X_features = spca.fit_transform(X_norm)
-        for i in range(len(roi_list)):
-            row = X_features[i]
-            if not np.all(np.isfinite(row)):
-                continue
-            X_rows.append(row)
-            valid_idx.append(i)
-        # traces_out / fly_labels already filled above
-        if len(X_rows) != len(traces_out):
-            # re-filter to keep only valid
-            keep = valid_idx
-            traces_out  = [traces_out[k]  for k in keep]
-            fly_labels  = [fly_labels[k]  for k in keep]
-            tseries_labels = [tseries_labels[k] for k in keep]
-
     if len(X_rows) == 0:
         return None, None, None, None, None
 
     X = np.vstack(X_rows)
-    # Standardize features across population (per-feature z-score)
-    col_std = X.std(axis=0)
-    col_std[col_std == 0] = 1.0
-    X = (X - X.mean(axis=0)) / col_std
     # Standardize features across population (per-feature z-score)
     col_std = X.std(axis=0)
     col_std[col_std == 0] = 1.0
@@ -1651,18 +1517,8 @@ def plot_embedding_scatter(embedding, labels, title, save_path,
 def plot_cluster_traces(traces, labels, mean_fps, stim_protocol, stim_time,
                         title, save_path,
                         seg_window=None, feature_subtitle=None):
-                        title, save_path,
-                        seg_window=None, feature_subtitle=None):
     """
     For each cluster: plot faint individual traces + mean ± SEM, stimulus on top.
-
-    Parameters
-    ----------
-    seg_window : tuple (start_s, end_s) or None
-        If given, slice traces and stimulus to this time window (in seconds).
-        None = plot the full trace.
-    feature_subtitle : str or None
-        If given, shown as a second smaller title line (used for 'features' set).
 
     Parameters
     ----------
@@ -1688,22 +1544,8 @@ def plot_cluster_traces(traces, labels, mean_fps, stim_protocol, stim_time,
         stim_protocol = stim_protocol[stim_mask]
         stim_time     = stim_time[stim_mask] - start_s   # reset to 0
 
-    # --- apply segment window to traces and stim ---
-    if seg_window is not None:
-        start_s, end_s = seg_window
-        i0_trace = int(start_s * mean_fps)
-        i1_trace = int(end_s   * mean_fps)
-        traces = [t[i0_trace:min(i1_trace, len(t))] for t in traces]
-
-        stim_mask  = (stim_time >= start_s) & (stim_time <= end_s)
-        stim_protocol = stim_protocol[stim_mask]
-        stim_time     = stim_time[stim_mask] - start_s   # reset to 0
-
     # align traces to min length
     min_len = min(len(t) for t in traces)
-    if min_len == 0:
-        return
-    time = np.arange(min_len) / mean_fps
     if min_len == 0:
         return
     time = np.arange(min_len) / mean_fps
@@ -1713,14 +1555,11 @@ def plot_cluster_traces(traces, labels, mean_fps, stim_protocol, stim_time,
     outer_gs = fig.add_gridspec(1, n_clusters, hspace=0.3, wspace=0.35)
 
     cmap   = plt.cm.tab10
-    cmap   = plt.cm.tab10
     colors = {c: cmap(i % 10) for i, c in enumerate(plot_clusters)}
 
     max_stim_time = stim_time[-1] if len(stim_time) > 0 else time[-1]
-    max_stim_time = stim_time[-1] if len(stim_time) > 0 else time[-1]
 
     for col_idx, cluster_id in enumerate(plot_clusters):
-        mask     = np.array(labels) == cluster_id
         mask     = np.array(labels) == cluster_id
         c_traces = [traces[i][:min_len] for i in range(len(traces)) if mask[i]]
         n_rois   = len(c_traces)
@@ -1729,10 +1568,6 @@ def plot_cluster_traces(traces, labels, mean_fps, stim_protocol, stim_time,
 
         # Stimulus
         ax_stim = fig.add_subplot(inner_gs[0])
-        if len(stim_protocol) > 0:
-            ax_stim.fill_between(stim_time, 0, stim_protocol,
-                                 color='lightblue', alpha=0.7, linewidth=0)
-            ax_stim.plot(stim_time, stim_protocol, color='blue', linewidth=1.2)
         if len(stim_protocol) > 0:
             ax_stim.fill_between(stim_time, 0, stim_protocol,
                                  color='lightblue', alpha=0.7, linewidth=0)
@@ -1761,11 +1596,6 @@ def plot_cluster_traces(traces, labels, mean_fps, stim_protocol, stim_time,
         ax_trace.grid(True, alpha=0.3)
         ax_trace.axhline(y=0, color='black', linestyle='--', linewidth=0.8, alpha=0.5)
 
-    # Main title + optional feature subtitle
-    full_title = title
-    if feature_subtitle is not None:
-        full_title = f'{title}\n{feature_subtitle}'
-    fig.suptitle(full_title, fontsize=12, fontweight='bold', y=1.01)
     # Main title + optional feature subtitle
     full_title = title
     if feature_subtitle is not None:
@@ -2273,10 +2103,6 @@ def analyze_response_clustering(condition_rois, fly_rois, segments, mean_fps,
     Primary method: GMM + BIC (Baden et al. 2016).
     Visualisation: UMAP (condition scope) / PCA (per-fly scope).
     Also runs UMAP + k-means and UMAP + HDBSCAN for comparison.
-    Orchestrate all three clustering scopes × feature sets.
-    Primary method: GMM + BIC (Baden et al. 2016).
-    Visualisation: UMAP (condition scope) / PCA (per-fly scope).
-    Also runs UMAP + k-means and UMAP + HDBSCAN for comparison.
     """
     print("\n" + "="*60)
     print("Running response profile clustering...")
@@ -2308,38 +2134,10 @@ def analyze_response_clustering(condition_rois, fly_rois, segments, mean_fps,
         if fset.startswith('features_') and fset != 'features':
             return f'{_feat_seg_subtitle}  |  segment: {fset.split("_",1)[1]}'
         return None
-    feature_sets = (
-        ['full', 'spca']
-        + [f'segment_{s}' for s in seg_names]
-        + ['features']
-        + [f'features_{s}' for s in seg_names]
-    )
-    k_range_gmm  = range(2, 13)
-    k_range_km   = range(2, 9)
-
-    _feat_subtitle     = ('Features per segment: peak, trough, AUC, peak-lat, rise  |  '
-                          'Global: ON-amp, OFF-amp, lum-slope, ON-OFF-idx, freq-idx, cont-idx')
-    _feat_seg_subtitle = 'Features: peak, trough, AUC, peak-lat, rise'
-
-    def _seg_window(fset):
-        if fset.startswith('segment_'):
-            return segments[fset.split('_', 1)[1]]
-        if fset.startswith('features_') and fset != 'features':
-            return segments[fset.split('_', 1)[1]]
-        return None
-
-    def _subtitle(fset):
-        if fset in ('features', 'spca'):
-            return _feat_subtitle if fset == 'features' else '20 sparse PCA components (Baden et al. 2016)'
-        if fset.startswith('features_') and fset != 'features':
-            return f'{_feat_seg_subtitle}  |  segment: {fset.split("_",1)[1]}'
-        return None
 
     # ------------------------------------------------------------------ #
     # SCOPE 1 & 3: per-condition  (UMAP visualisation + GMM clustering)  #
-    # SCOPE 1 & 3: per-condition  (UMAP visualisation + GMM clustering)  #
     # ------------------------------------------------------------------ #
-    print("\n  Scope: per-condition")
     print("\n  Scope: per-condition")
     for fset in feature_sets:
         print(f"    Feature set: {fset}")
@@ -2349,13 +2147,8 @@ def analyze_response_clustering(condition_rois, fly_rois, segments, mean_fps,
 
         if X is None or len(X) < 10:
             print(f"      Skipping: insufficient data ({0 if X is None else len(X)} ROIs)")
-            print(f"      Skipping: insufficient data ({0 if X is None else len(X)} ROIs)")
             continue
 
-        pfx = f'condition_{fset}'
-
-        # ---- GMM + BIC (primary clustering) --------------------------------
-        gmm_labels, best_k_gmm, posteriors, gmm_diag = run_gmm_bic(X, k_range_gmm)
         pfx = f'condition_{fset}'
 
         # ---- GMM + BIC (primary clustering) --------------------------------
@@ -2416,40 +2209,25 @@ def analyze_response_clustering(condition_rois, fly_rois, segments, mean_fps,
             title=f'Condition | {fset} | k-means (k={best_k})',
             save_path=os.path.join(output_dir, f'clustering_traces_{pfx}_kmeans.png'),
             seg_window=_seg_window(fset), feature_subtitle=_subtitle(fset))
-            save_path=os.path.join(output_dir, f'clustering_umap_{pfx}_kmeans.png'),
-            hue_labels=fly_lbls, hue_title='Fly')
-        plot_cluster_traces(traces, best_labels_km, mean_fps, stim_protocol, stim_time,
-            title=f'Condition | {fset} | k-means (k={best_k})',
-            save_path=os.path.join(output_dir, f'clustering_traces_{pfx}_kmeans.png'),
-            seg_window=_seg_window(fset), feature_subtitle=_subtitle(fset))
 
-        # ---- UMAP + HDBSCAN (comparison) -----------------------------------
         # ---- UMAP + HDBSCAN (comparison) -----------------------------------
         emb_hdb, labels_hdb = run_umap_hdbscan(X)
         plot_embedding_scatter(emb_hdb, labels_hdb,
-        plot_embedding_scatter(emb_hdb, labels_hdb,
             title=f'Condition | {fset} | HDBSCAN',
-            save_path=os.path.join(output_dir, f'clustering_umap_{pfx}_hdbscan.png'),
             save_path=os.path.join(output_dir, f'clustering_umap_{pfx}_hdbscan.png'),
             hue_labels=fly_lbls, hue_title='Fly')
         plot_cluster_traces(traces, labels_hdb, mean_fps, stim_protocol, stim_time,
-        plot_cluster_traces(traces, labels_hdb, mean_fps, stim_protocol, stim_time,
             title=f'Condition | {fset} | HDBSCAN',
-            save_path=os.path.join(output_dir, f'clustering_traces_{pfx}_hdbscan.png'),
-            seg_window=_seg_window(fset), feature_subtitle=_subtitle(fset))
             save_path=os.path.join(output_dir, f'clustering_traces_{pfx}_hdbscan.png'),
             seg_window=_seg_window(fset), feature_subtitle=_subtitle(fset))
 
     # ------------------------------------------------------------------ #
     # SCOPE 2: per-fly independent  (PCA visualisation + GMM clustering) #
-    # SCOPE 2: per-fly independent  (PCA visualisation + GMM clustering) #
     # ------------------------------------------------------------------ #
-    print("\n  Scope: per-fly")
     print("\n  Scope: per-fly")
     for fly_id, roi_list in fly_rois.items():
         print(f"    Fly: {fly_id}  ({len(roi_list)} ROIs)")
         for fset in feature_sets:
-            X, fly_lbls_f, _, traces_f, _ = prepare_clustering_data(
             X, fly_lbls_f, _, traces_f, _ = prepare_clustering_data(
                 roi_list, fset, segments, mean_fps,
                 polarity_results, luminance_results, contrast_results, frequency_results)
@@ -2505,7 +2283,6 @@ def analyze_response_clustering(condition_rois, fly_rois, segments, mean_fps,
     print("\n  Clustering analysis complete.")
 
 
-def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=None, output_dir='output_plots', xlims=None, qi_threshold=0.45):
 def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=None, output_dir='output_plots', xlims=None, qi_threshold=0.45):
     """
     Process PKL file with fluorescence data and create hierarchical plots.
@@ -2582,14 +2359,6 @@ def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=No
 
     # Process each TSeries — interpolate and store raw per-ROI traces only.
     # Mean computation is deferred until after QI filtering below.
-    # Storage for individual ROI traces per TSeries (for QI computation + clustering)
-    # roi_accumulator[fly_id][roi_idx] -> list of traces (one per TSeries replicate)
-    roi_accumulator = defaultdict(lambda: defaultdict(list))
-    # tseries_raw[tseries_key] = {'traces': array, 'time': array, 'fly_id': str, 'idx': int}
-    tseries_raw = {}
-
-    # Process each TSeries — interpolate and store raw per-ROI traces only.
-    # Mean computation is deferred until after QI filtering below.
     for tseries_idx, (tseries_key, tseries_data) in enumerate(data.items()):
         print(f"\nProcessing TSeries: {tseries_key}")
         tseries_number = tseries_key.split('-')[-1]
@@ -2610,13 +2379,11 @@ def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=No
         meta_tseries = meta_tseries[meta_tseries['TSeries'] == int(tseries_number)]
         tseries_fps = meta_tseries['fps'].values[0]
 
-
         interpolated_traces = []
         common_time = None
         
         for roi_idx, roi in enumerate(final_rois):
             df_trace = roi.df_trace
-            roi_fps = tseries_fps if original_fps is None else original_fps
             roi_fps = tseries_fps if original_fps is None else original_fps
             interp_trace, time = interpolate_trace(df_trace, roi_fps, mean_fps, trim_seconds=5)
             interpolated_traces.append(interp_trace)
@@ -2696,79 +2463,7 @@ def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=No
         print(f"  {tseries_key}: {n_filtered}/{n_total} ROIs kept (QI≥{qi_threshold})")
 
         # Plot 1: filtered ROIs + mean
-        # Accumulate per-ROI traces for QI computation
-        for roi_idx, roi_trace in enumerate(interpolated_traces):
-            roi_accumulator[fly_id][roi_idx].append(roi_trace)
-
-        # Store raw TSeries data for deferred mean computation after QI filtering
-        tseries_raw[tseries_key] = {
-            'traces': interpolated_traces,
-            'time':   common_time,
-            'fly_id': fly_id,
-            'idx':    tseries_idx,
-        }
-
-    # ---- Compute QI for every ROI across its replicates -------------------
-    print("\n" + "="*60)
-    print("Computing response quality index (QI) per ROI ...")
-    qi_map   = {}   # (fly_id, roi_idx) -> QI value
-    qi_pass  = {}   # (fly_id, roi_idx) -> bool
-    qi_all   = []
-    for fly_id_k, roi_dict in roi_accumulator.items():
-        for roi_idx_k, trace_list in roi_dict.items():
-            qi = compute_response_qi(trace_list)
-            qi_map[(fly_id_k, roi_idx_k)]  = qi
-            qi_pass[(fly_id_k, roi_idx_k)] = qi >= qi_threshold
-            qi_all.append(qi)
-    n_pass = sum(qi_pass.values())
-    print(f"  {n_pass}/{len(qi_all)} ROIs pass QI ≥ {qi_threshold}")
-
-    # QI distribution plot
-    if qi_all:
-        fig, ax = plt.subplots(figsize=(8, 5))
-        ax.hist(qi_all, bins=40, color='steelblue', edgecolor='black', alpha=0.7)
-        ax.axvline(qi_threshold, color='red', linestyle='--', linewidth=2,
-                   label=f'Threshold = {qi_threshold}')
-        ax.set_xlabel('Quality Index (QI)', fontsize=12)
-        ax.set_ylabel('Number of ROIs', fontsize=12)
-        ax.set_title(f'Response Quality Index Distribution\n'
-                     f'{n_pass}/{len(qi_all)} ROIs pass threshold', fontsize=13)
-        ax.legend(); ax.grid(True, alpha=0.3)
-        plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, 'clustering_qi_distribution.png'),
-                    dpi=150, bbox_inches='tight')
-        plt.close()
-
-    # ---- Build QI-filtered means and feed all downstream analyses ----------
-    # For each TSeries, keep only ROIs whose (fly_id, roi_idx) passes QI,
-    # then compute mean across the surviving ROIs.  This ensures mean traces,
-    # segment analyses, and clustering all use the same filtered population.
-    print("Building QI-filtered mean traces ...")
-    for tseries_key, raw in tseries_raw.items():
-        fly_id   = raw['fly_id']
-        traces   = raw['traces']      # shape (n_rois, n_frames)
-        time     = raw['time']
-        ts_idx   = raw['idx']
-
-        # Select rows whose ROI index passes QI
-        keep_idx = [ri for ri in range(len(traces))
-                    if qi_pass.get((fly_id, ri), False)]
-
-        if len(keep_idx) == 0:
-            print(f"  {tseries_key}: all ROIs failed QI, skipping")
-            continue
-
-        filtered_traces = traces[keep_idx]
-        n_filtered = len(filtered_traces)
-        n_total    = len(traces)
-        print(f"  {tseries_key}: {n_filtered}/{n_total} ROIs kept (QI≥{qi_threshold})")
-
-        # Plot 1: filtered ROIs + mean
         fig, mean_trace = plot_traces_with_mean(
-            filtered_traces, time, stim_protocol, stim_time,
-            f'TSeries: {tseries_key} | FlyID: {fly_id} | QI-filtered {n_filtered}/{n_total} ROIs',
-            ylabel='ΔF/F',
-            xlim=xlims.get('full') if xlims else None
             filtered_traces, time, stim_protocol, stim_time,
             f'TSeries: {tseries_key} | FlyID: {fly_id} | QI-filtered {n_filtered}/{n_total} ROIs',
             ylabel='ΔF/F',
@@ -2776,16 +2471,8 @@ def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=No
         )
         plt.savefig(os.path.join(output_dir,
                     f'1_tseries_{ts_idx:03d}_{tseries_key}.png'),
-        plt.savefig(os.path.join(output_dir,
-                    f'1_tseries_{ts_idx:03d}_{tseries_key}.png'),
                     dpi=150, bbox_inches='tight')
         plt.close()
-
-        tseries_means[tseries_key] = (mean_trace, time, fly_id)
-        fly_means[fly_id].append((mean_trace, time))
-        all_means.append((mean_trace, time))
-
-        segmented = segment_trace(mean_trace, time, segments, mean_fps)
 
         tseries_means[tseries_key] = (mean_trace, time, fly_id)
         fly_means[fly_id].append((mean_trace, time))
@@ -2795,34 +2482,9 @@ def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=No
         for seg_name, (seg_trace, seg_time) in segmented.items():
             if len(seg_trace) == 0:
                 continue
-            if len(seg_trace) == 0:
-                continue
             tseries_segments[seg_name][tseries_key] = (seg_trace, seg_time, fly_id)
             fly_segments[seg_name][fly_id].append((seg_trace, seg_time))
             all_segments[seg_name].append((seg_trace, seg_time))
-
-    # ---- Build clustering registries: QI-filtered + TSeries-averaged -------
-    print("\n" + "="*60)
-    print("Building clustering registries (QI-filtered, TSeries-averaged) ...")
-    condition_rois = []
-    fly_rois       = defaultdict(list)
-    qi_passed      = 0
-    for fly_id_k, roi_dict in roi_accumulator.items():
-        n_averaged = 0
-        for roi_idx_k, trace_list in roi_dict.items():
-            if not qi_pass.get((fly_id_k, roi_idx_k), False):
-                continue
-            min_len   = min(len(t) for t in trace_list)
-            avg_trace = np.mean([t[:min_len] for t in trace_list], axis=0)
-            entry = (avg_trace, fly_id_k, f'roi{roi_idx_k}')
-            condition_rois.append(entry)
-            fly_rois[fly_id_k].append(entry)
-            n_averaged += 1
-            qi_passed  += 1
-        print(f"  FlyID {fly_id_k}: {n_averaged} ROIs averaged across "
-              f"{len(next(iter(roi_dict.values())))} TSeries replicates")
-    print(f"  Total ROIs for clustering: {len(condition_rois)}")
-
 
     # ---- Build clustering registries: QI-filtered + TSeries-averaged -------
     print("\n" + "="*60)
@@ -2868,8 +2530,6 @@ def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=No
             f'FlyID: {fly_id} | Average across {len(aligned_traces)} TSeries',
             ylabel='ΔF/F',
             xlim=xlims.get('full') if xlims else None
-            ylabel='ΔF/F',
-            xlim=xlims.get('full') if xlims else None
         )
         plt.savefig(os.path.join(output_dir, f'2_fly_{fly_id}.png'), 
                     dpi=150, bbox_inches='tight')
@@ -2891,8 +2551,6 @@ def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=No
         stim_protocol,
         stim_time,
         f'Global Average | All {len(all_traces)} TSeries from {len(fly_means)} Flies',
-        ylabel='ΔF/F',
-        xlim=xlims.get('full') if xlims else None
         ylabel='ΔF/F',
         xlim=xlims.get('full') if xlims else None
     )
@@ -2928,8 +2586,6 @@ def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=No
         seg_stim_time = np.arange(len(seg_stim)) / mean_fps
         seg_xlim = xlims.get(seg_name) if xlims else None
 
-        seg_xlim = xlims.get(seg_name) if xlims else None
-
         # Average per fly
         for fly_id, traces_and_times in fly_segments[seg_name].items():
             min_length = min(len(trace) for trace, _ in traces_and_times)
@@ -2946,8 +2602,6 @@ def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=No
                 seg_stim,
                 seg_stim_time,
                 f'{seg_name.upper()} | FlyID: {fly_id} | {len(aligned_traces)} TSeries',
-                ylabel='ΔF/F',
-                xlim=seg_xlim
                 ylabel='ΔF/F',
                 xlim=seg_xlim
             )
@@ -2970,8 +2624,6 @@ def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=No
             seg_stim,
             seg_stim_time,
             f'{seg_name.upper()} | Global Average | {len(all_traces)} TSeries',
-            ylabel='ΔF/F',
-            xlim=seg_xlim
             ylabel='ΔF/F',
             xlim=seg_xlim
         )
@@ -3005,258 +2657,6 @@ def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=No
         luminance_results=luminance_results,
         contrast_results=contrast_results,
         frequency_results=frequency_results)
-
-    return tseries_means, fly_averaged_traces, global_mean, segment_results, luminance_results, polarity_results, contrast_results, frequency_results, variability_results, across_fly_variability, condition_rois, mean_fps
-
-def plot_cross_type_umap(all_results, condition_names, segments, output_dir):
-    """
-    Embed all QI-filtered, replicate-averaged ROIs from every cell type into one
-    shared UMAP space using scalar features. Colours by cell type.
-
-    Uses the 'features' feature set (26-dim scalar vector) so the embedding
-    is interpretable and fast. Each point = one neuron.
-    """
-    print("\n" + "="*60)
-    print("Building cross-type UMAP ...")
-
-    all_X, all_type_labels, all_fly_labels = [], [], []
-
-    for results, cond in zip(all_results, condition_names):
-        rois     = results.get('condition_rois', [])
-        mean_fps = results.get('mean_fps', 10.0)
-        pol_res  = results.get('polarity_results')
-        lum_res  = results.get('luminance_results')
-        cnt_res  = results.get('contrast_results')
-        frq_res  = results.get('frequency_results')
-
-        for (trace, fly_id, roi_key) in rois:
-            feat_vec, _ = extract_roi_features(
-                trace, None, segments, mean_fps,
-                pol_res, lum_res, cnt_res, frq_res)
-            if not np.all(np.isfinite(feat_vec)):
-                continue
-            all_X.append(feat_vec)
-            all_type_labels.append(cond)
-            all_fly_labels.append(fly_id)
-
-    if len(all_X) < 10:
-        print("  Insufficient data for cross-type UMAP, skipping.")
-        return
-
-    X = np.vstack(all_X)
-    # z-score per feature across all ROIs
-    col_std = X.std(axis=0); col_std[col_std == 0] = 1.0
-    X = (X - X.mean(axis=0)) / col_std
-
-    print(f"  Running UMAP on {X.shape[0]} ROIs × {X.shape[1]} features ...")
-    reducer   = umap.UMAP(n_components=2, n_neighbors=15, min_dist=0.1,
-                          random_state=42)
-    embedding = reducer.fit_transform(X)
-
-    unique_types = list(dict.fromkeys(all_type_labels))   # preserve order
-    cmap   = plt.cm.tab10
-    colors = {t: cmap(i % 10) for i, t in enumerate(unique_types)}
-
-    fig, axes = plt.subplots(1, 2, figsize=(16, 7))
-
-    # Left panel — coloured by cell type
-    ax = axes[0]
-    for t in unique_types:
-        mask = np.array(all_type_labels) == t
-        ax.scatter(embedding[mask, 0], embedding[mask, 1],
-                   color=colors[t], s=25, alpha=0.7, label=t, edgecolors='none')
-    ax.set_title('Cross-type UMAP\n(coloured by cell type)',
-                 fontsize=13, fontweight='bold')
-    ax.set_xlabel('UMAP 1'); ax.set_ylabel('UMAP 2')
-    ax.legend(markerscale=2, fontsize=9, framealpha=0.8)
-    ax.grid(True, alpha=0.2)
-
-    # Right panel — coloured by fly (sanity check for preparation bias)
-    ax = axes[1]
-    unique_flies = list(dict.fromkeys(all_fly_labels))
-    fly_colors   = {f: cmap(i % 10) for i, f in enumerate(unique_flies)}
-    for f in unique_flies:
-        mask = np.array(all_fly_labels) == f
-        ax.scatter(embedding[mask, 0], embedding[mask, 1],
-                   color=fly_colors[f], s=25, alpha=0.5, edgecolors='none')
-    # overlay type centroids as large markers
-    for t in unique_types:
-        mask = np.array(all_type_labels) == t
-        cx, cy = embedding[mask, 0].mean(), embedding[mask, 1].mean()
-        ax.scatter(cx, cy, color=colors[t], s=250, marker='*',
-                   edgecolors='black', linewidths=0.8, zorder=5, label=t)
-    ax.set_title('Cross-type UMAP\n(coloured by fly, ★ = type centroid)',
-                 fontsize=13, fontweight='bold')
-    ax.set_xlabel('UMAP 1'); ax.set_ylabel('UMAP 2')
-    ax.legend(markerscale=1, fontsize=8, framealpha=0.8)
-    ax.grid(True, alpha=0.2)
-
-    plt.suptitle('All cell types — shared feature space', fontsize=14,
-                 fontweight='bold', y=1.01)
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'combined_cross_type_umap.png'),
-                dpi=150, bbox_inches='tight')
-    plt.close()
-    print("  Cross-type UMAP saved.")
-
-
-def plot_functional_fingerprint(all_results, condition_names, output_dir):
-    """
-    Two-panel figure:
-      Left  — Functional fingerprint heatmap: rows = cell types,
-               columns = response indices (z-scored across types).
-               Raw values shown as text in each cell.
-      Right — Within-type vs between-type variance decomposition:
-               bar chart of variance explained by type identity for
-               each response index.
-    """
-    print("\n" + "="*60)
-    print("Building functional fingerprint ...")
-
-    # ── collect response indices per type ────────────────────────────────
-    # For each index we want fly-level values so we can compute within-type SD.
-    # Structure: index_name -> {type: [fly_values]}
-    index_definitions = [
-        ('ON amplitude',     lambda r: list(r['polarity_results']['fly_on_mean'].values())),
-        ('OFF amplitude',    lambda r: list(r['polarity_results']['fly_off_mean'].values())),
-        ('Luminance slope',  lambda r: list(r['luminance_results']['fly_slopes'].values())),
-        ('Freq. peak (Hz)',  _extract_freq_peak),
-        ('Contrast slope',   _extract_contrast_slope),
-        ('Within-fly CV',    lambda r: [np.mean(list(r['variability_results']['fly_cv'][s].values()))
-                                        for s in ['polarity','frequency','contrast','luminance']
-                                        if r['variability_results']['fly_cv'][s]]),
-        ('Reliability',      lambda r: [np.mean(list(r['variability_results']['fly_reliability'][s].values()))
-                                        for s in ['polarity','frequency','contrast','luminance']
-                                        if r['variability_results']['fly_reliability'][s]]),
-    ]
-
-    index_names  = [d[0] for d in index_definitions]
-    n_idx        = len(index_names)
-    n_types      = len(condition_names)
-
-    # type_means[type_idx, idx] and type_sems, plus fly-level for variance decomp
-    type_means = np.full((n_types, n_idx), np.nan)
-    type_sems  = np.full((n_types, n_idx), np.nan)
-    fly_values = {name: {cond: [] for cond in condition_names}
-                  for name in index_names}
-
-    for ti, (results, cond) in enumerate(zip(all_results, condition_names)):
-        for ii, (iname, ifn) in enumerate(index_definitions):
-            try:
-                vals = ifn(results)
-                vals = [v for v in vals if np.isfinite(v)]
-                if len(vals) == 0:
-                    continue
-                type_means[ti, ii] = np.mean(vals)
-                type_sems[ti, ii]  = np.std(vals) / np.sqrt(len(vals))
-                fly_values[iname][cond] = vals
-            except Exception:
-                pass
-
-    # z-score each column for the heatmap colour scale
-    col_mean = np.nanmean(type_means, axis=0)
-    col_std  = np.nanstd(type_means,  axis=0)
-    col_std[col_std == 0] = 1.0
-    Z = (type_means - col_mean) / col_std
-
-    # ── within vs between variance ────────────────────────────────────────
-    variance_ratio = np.full(n_idx, np.nan)
-    for ii, iname in enumerate(index_names):
-        all_fly_vals = [v for cond in condition_names
-                        for v in fly_values[iname][cond]]
-        if len(all_fly_vals) < 2:
-            continue
-        between_var = np.nanvar(type_means[:, ii])
-        within_var  = np.nanmean([np.var(fly_values[iname][c])
-                                  for c in condition_names
-                                  if len(fly_values[iname][c]) > 1])
-        total = between_var + within_var
-        variance_ratio[ii] = between_var / total if total > 0 else 0.0
-
-    # ── figure ────────────────────────────────────────────────────────────
-    fig, (ax1, ax2) = plt.subplots(1, 2,
-                                    figsize=(5 + n_idx * 1.0, max(6, n_types * 0.9 + 2)),
-                                    gridspec_kw={'width_ratios': [3, 1]})
-
-    # Left: heatmap
-    vmax = np.nanmax(np.abs(Z))
-    im = ax1.imshow(Z, cmap='RdBu_r', aspect='auto',
-                    vmin=-vmax, vmax=vmax)
-
-    # Annotate cells with raw mean ± SEM
-    for ti in range(n_types):
-        for ii in range(n_idx):
-            m = type_means[ti, ii]
-            s = type_sems[ti, ii]
-            if np.isfinite(m):
-                txt = f'{m:.2f}\n±{s:.2f}'
-                bg  = Z[ti, ii]
-                fc  = 'white' if abs(bg) > 0.8 * vmax else 'black'
-                ax1.text(ii, ti, txt, ha='center', va='center',
-                         fontsize=7, color=fc, fontweight='bold')
-
-    ax1.set_xticks(range(n_idx))
-    ax1.set_xticklabels(index_names, rotation=40, ha='right', fontsize=9)
-    ax1.set_yticks(range(n_types))
-    ax1.set_yticklabels(condition_names, fontsize=10)
-    ax1.set_title('Functional Fingerprint\n(z-scored across types)',
-                  fontsize=12, fontweight='bold')
-    plt.colorbar(im, ax=ax1, label='z-score', shrink=0.6)
-
-    # Right: variance explained by type identity
-    colors_bar = ['#2ecc71' if r >= 0.5 else '#e74c3c' if r < 0.25 else '#f39c12'
-                  for r in variance_ratio]
-    bars = ax2.barh(range(n_idx), variance_ratio, color=colors_bar,
-                    edgecolor='black', linewidth=0.8, alpha=0.85)
-    ax2.axvline(0.5, color='black', linestyle='--', linewidth=1.2, alpha=0.6,
-                label='50% threshold')
-    for i, v in enumerate(variance_ratio):
-        if np.isfinite(v):
-            ax2.text(v + 0.01, i, f'{v:.2f}', va='center', fontsize=8)
-    ax2.set_yticks(range(n_idx))
-    ax2.set_yticklabels(index_names, fontsize=9)
-    ax2.set_xlabel('Variance explained\nby cell type identity', fontsize=9)
-    ax2.set_title('Between-type\nvs total variance', fontsize=11, fontweight='bold')
-    ax2.set_xlim(0, 1.15)
-    ax2.grid(True, alpha=0.3, axis='x')
-    ax2.legend(fontsize=8)
-
-    plt.suptitle('Cross-type functional comparison', fontsize=14,
-                 fontweight='bold', y=1.02)
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'combined_functional_fingerprint.png'),
-                dpi=150, bbox_inches='tight')
-    plt.close()
-    print("  Functional fingerprint saved.")
-
-
-def _extract_freq_peak(results):
-    """Return list of per-fly frequency-tuning peak (Hz)."""
-    freq_res  = results['frequency_results']
-    fly_resps = freq_res.get('fly_responses', {})
-    peaks = []
-    for fly_id, freq_dict in fly_resps.items():
-        if not freq_dict:
-            continue
-        best_freq = max(freq_dict, key=lambda f: freq_dict[f])
-        peaks.append(float(best_freq))
-    return peaks
-
-
-def _extract_contrast_slope(results):
-    """Return list of per-fly linear slope of the absolute contrast response."""
-    cont_res  = results['contrast_results']
-    fly_resps = cont_res.get('fly_responses_absolute', {})
-    slopes = []
-    for fly_id, cont_dict in fly_resps.items():
-        if len(cont_dict) < 2:
-            continue
-        xs = np.array(sorted(cont_dict.keys()), dtype=float)
-        ys = np.array([cont_dict[x] for x in xs], dtype=float)
-        if len(xs) >= 2 and np.all(np.isfinite(ys)):
-            slope, _ = np.polyfit(xs, ys, 1)
-            slopes.append(float(slope))
-    return slopes
 
     return tseries_means, fly_averaged_traces, global_mean, segment_results, luminance_results, polarity_results, contrast_results, frequency_results, variability_results, across_fly_variability, condition_rois, mean_fps
 
@@ -3917,15 +3317,6 @@ def plot_combined_analysis(all_results, pkl_files, output_dir):
     # ============== FUNCTIONAL FINGERPRINT ==============
     plot_functional_fingerprint(all_results, condition_names, output_dir)
 
-    # ============== CROSS-TYPE UMAP ==============
-    # Reconstruct segments from first result's mean_fps (same chirp for all)
-    first_fps = all_results[0].get('mean_fps', 10.0)
-    _, _, cross_segments = create_stimulus_protocol(first_fps)
-    plot_cross_type_umap(all_results, condition_names, cross_segments, output_dir)
-
-    # ============== FUNCTIONAL FINGERPRINT ==============
-    plot_functional_fingerprint(all_results, condition_names, output_dir)
-
 
 # Example usage
 if __name__ == "__main__":
@@ -3936,39 +3327,7 @@ if __name__ == "__main__":
         # pkl_files = [r"D:\Christian\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_ON_500_ME_Y.pkl", r"D:\Christian\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_OFF_ME_Y.pkl"]
         # pkl_files = [r"D:\Christian\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_ON_500_LO_Y.pkl", r"D:\Christian\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_OFF_LO_Y.pkl"]
         pkl_files = [r"D:\Christian\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_ON_500_LOP_Y.pkl", r"D:\Christian\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_OFF_LOP_Y.pkl"]
-        # pkl_files = [r"D:\Christian\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_ON_500_ME_Y.pkl", r"D:\Christian\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_OFF_ME_Y.pkl"]
-        # pkl_files = [r"D:\Christian\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_ON_500_LO_Y.pkl", r"D:\Christian\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_OFF_LO_Y.pkl"]
-        pkl_files = [r"D:\Christian\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_ON_500_LOP_Y.pkl", r"D:\Christian\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_OFF_LOP_Y.pkl"]
     elif degen:
-        # pkl_files = [r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Mi1_chirp.pkl", r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Mi4_chirp.pkl", r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Mi9_chirp.pkl"]
-        pkl_files = [r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Tm1_chirp.pkl", r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Tm4_chirp.pkl", r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Tm9_chirp.pkl",\
-                     r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Mi1_chirp.pkl", r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Mi4_chirp.pkl", r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Mi9_chirp.pkl"]
-
-    # ---------------------------------------------------------------
-    # X-axis limits per pkl file.
-    # One dict per entry in pkl_files (same order).
-    # Keys: 'full', 'polarity', 'frequency', 'contrast', 'luminance'
-    # Value: (xmin, xmax) in seconds, or None for auto.
-    # ---------------------------------------------------------------
-    xlims_list = [
-        # _Tm1
-        {'full': None, 'polarity': None, 'frequency': None, 'contrast': None, 'luminance': None},
-        # _Tm4
-        {'full': None, 'polarity': None, 'frequency': None, 'contrast': None, 'luminance': None},
-        # _Tm9
-        {'full': None, 'polarity': None, 'frequency': None, 'contrast': None, 'luminance': None},
-        # _Mi1
-        {'full': None, 'polarity': None, 'frequency': None, 'contrast': None, 'luminance': None},
-        # _Mi4
-        {'full': None, 'polarity': None, 'frequency': None, 'contrast': None, 'luminance': None},
-        # _Mi9
-        {'full': None, 'polarity': None, 'frequency': None, 'contrast': None, 'luminance': None},
-    ]
-    # Pad with None-dicts if xlims_list is shorter than pkl_files
-    _empty_xlims = {'full': None, 'polarity': None, 'frequency': None, 'contrast': None, 'luminance': None}
-    while len(xlims_list) < len(pkl_files):
-        xlims_list.append(_empty_xlims.copy())
-
         # pkl_files = [r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Mi1_chirp.pkl", r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Mi4_chirp.pkl", r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Mi9_chirp.pkl"]
         pkl_files = [r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Tm1_chirp.pkl", r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Tm4_chirp.pkl", r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Tm9_chirp.pkl",\
                      r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Mi1_chirp.pkl", r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Mi4_chirp.pkl", r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Mi9_chirp.pkl"]
@@ -4000,22 +3359,14 @@ if __name__ == "__main__":
 
     all_results = []
     for PKL_FILE, xlims in zip(pkl_files, xlims_list):
-    for PKL_FILE, xlims in zip(pkl_files, xlims_list):
         folder = PKL_FILE.split('\\')[-1].split('.')[0]
         if multi:
-            metadata = pd.read_excel("D:/Christian/02_twophoton/metadata.xlsx", sheet_name='251023_tdc2_cschr_pan')
-            output_dir=f"D:/Christian/02_twophoton/251023_tdc2_cschr_pan/4_results/{folder}"
             metadata = pd.read_excel("D:/Christian/02_twophoton/metadata.xlsx", sheet_name='251023_tdc2_cschr_pan')
             output_dir=f"D:/Christian/02_twophoton/251023_tdc2_cschr_pan/4_results/{folder}"
         elif degen:
             metadata = pd.read_excel("D:/Christian/02_twophoton/metadata.xlsx", sheet_name='250730_degen_var')
             output_dir=f"D:/Christian/02_twophoton/250730_degen_var/4_results/{folder}"
-            metadata = pd.read_excel("D:/Christian/02_twophoton/metadata.xlsx", sheet_name='250730_degen_var')
-            output_dir=f"D:/Christian/02_twophoton/250730_degen_var/4_results/{folder}"
         os.makedirs(output_dir, exist_ok=True)
-        mean_fps = pd.to_numeric(metadata['fps'], errors='coerce').dropna()
-        mean_fps = mean_fps[mean_fps.between(1, 200)].mean()
-        print(f"  mean_fps = {mean_fps:.4f} Hz")
         mean_fps = pd.to_numeric(metadata['fps'], errors='coerce').dropna()
         mean_fps = mean_fps[mean_fps.between(1, 200)].mean()
         print(f"  mean_fps = {mean_fps:.4f} Hz")
@@ -4024,17 +3375,12 @@ if __name__ == "__main__":
         
         # Run analysis
         tseries_means, fly_averaged_traces, global_mean, segment_results, luminance_results, polarity_results, contrast_results, frequency_results, variability_results, across_fly_variability, condition_rois, run_fps = process_pkl_file(
-        tseries_means, fly_averaged_traces, global_mean, segment_results, luminance_results, polarity_results, contrast_results, frequency_results, variability_results, across_fly_variability, condition_rois, run_fps = process_pkl_file(
             PKL_FILE, 
             metadata,
             multi,
             degen,
             TARGET_FPS,
-            TARGET_FPS,
             original_fps=ORIGINAL_FPS,
-            output_dir=output_dir,
-            xlims=xlims,
-            qi_threshold=0.45,
             output_dir=output_dir,
             xlims=xlims,
             qi_threshold=0.45,
@@ -4051,17 +3397,11 @@ if __name__ == "__main__":
             'condition_rois': condition_rois,
             'mean_fps': run_fps,
             'condition_name': folder,
-            'across_fly_variability': across_fly_variability,
-            'condition_rois': condition_rois,
-            'mean_fps': run_fps,
-            'condition_name': folder,
         })
     
     if multi:
         combined_output = "D:/Christian/02_twophoton/251023_tdc2_cschr_pan/4_results/combined"
-        combined_output = "D:/Christian/02_twophoton/251023_tdc2_cschr_pan/4_results/combined"
     elif degen:
-        combined_output = "D:/Christian/02_twophoton/250730_degen_var/4_results/combined"
         combined_output = "D:/Christian/02_twophoton/250730_degen_var/4_results/combined"
     
     os.makedirs(combined_output, exist_ok=True)

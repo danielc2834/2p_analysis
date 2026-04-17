@@ -708,9 +708,12 @@ class ROI_bg:
             self.max_response = np.nanmax(self.max_resp_all_epochs)
             self.max_resp_idx = np.nanargmax(self.max_resp_all_epochs)
         else:
-            self.max_resp_all_epochs = \
-                np.empty(shape=(int(self.stim_info['EPOCHS']),1)) #Seb: epochs_number --> EPOCHS
+            # self.max_resp_all_epochs = \
+            #     np.empty(shape=(int(self.stim_info['EPOCHS']),1)) #Seb: epochs_number --> EPOCHS
             
+            # self.max_resp_all_epochs[:] = np.nan
+            n_actual = max(self.resp_trace_all_epochs.keys()) + 1
+            self.max_resp_all_epochs = np.empty(shape=(n_actual, 1))
             self.max_resp_all_epochs[:] = np.nan
             
             for epoch_idx in self.resp_trace_all_epochs:
@@ -3134,6 +3137,62 @@ def generate_RF_map_stripes(rois, screen_w = 80):
         roi.stripe_r_squared = r_squared
         
     return rois
+
+# def generate_RF_map_stripes(rois, screen_w=60):
+#     """Map maximum responses per bar position onto a spatial profile."""
+#     for roi in rois:
+#         stim_info = roi.stim_info
+
+#         # Use bar positions stored by get_stim_xml_params if available
+#         if 'stripe_positions' in stim_info:
+#             positions = np.array(stim_info['stripe_positions'])
+#             pos_min, pos_max = float(positions[0]), float(positions[-1])
+#         else:
+#             pos_min, pos_max = 0.0, float(screen_w)
+
+#         screen_range = abs(pos_max - pos_min)
+#         screen_coords = np.linspace(pos_min, pos_max,
+#                                     num=max(1, int(screen_range)),
+#                                     endpoint=True)
+
+#         # Epoch 0 is the background interlude; RF info lives in epochs > 0
+#         resp_keys = sorted(k for k in roi.resp_trace_all_epochs if k > 0)
+
+#         if not resp_keys:
+#             roi.i_stripe_resp = np.zeros_like(screen_coords)
+#             roi.stripe_gauss_profile = None
+#             roi.stripe_gauss_coeff = None
+#             roi.stripe_gauss_fwhm = None
+#             roi.stripe_r_squared = None
+#             roi.discard = True
+#             continue
+
+#         max_resps = np.array([np.nanmax(roi.resp_trace_all_epochs[k])
+#                                for k in resp_keys])
+
+#         # Map epoch indices linearly onto the position axis
+#         epoch_positions = np.linspace(pos_min, pos_max,
+#                                       len(resp_keys), endpoint=True)
+#         roi.i_stripe_resp  = np.interp(screen_coords, epoch_positions, max_resps)
+#         roi.stripe_positions = epoch_positions
+#         roi.max_response   = float(np.nanmax(max_resps))
+
+#         try:
+#             fit_trace, r_squared, coeff = fit_1d_gauss(screen_coords,
+#                                                         roi.i_stripe_resp)
+#             roi.stripe_gauss_profile = fit_trace
+#             roi.stripe_gauss_coeff   = coeff
+#             roi.stripe_gauss_fwhm    = 2.355 * abs(coeff[2])
+#             roi.stripe_r_squared     = r_squared
+#             roi.discard = False
+#         except RuntimeError:
+#             roi.stripe_gauss_profile = None
+#             roi.stripe_gauss_coeff   = None
+#             roi.stripe_gauss_fwhm    = None
+#             roi.stripe_r_squared     = None
+#             roi.discard = True
+
+#     return rois
 
 def generate_RF_profile_stripes(rois):
     

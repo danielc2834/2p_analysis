@@ -329,9 +329,45 @@ def get_stim_xml_params(t_series_path,original_stimDir,Tseries_len,cplusplus=Fal
         #     stimInputData['duration'][ix]=barwidth/stimInputData['velocity'][ix]
         #     stimInputData['duration'][ix]=stimInputData['duration'][ix]+stimInputData['tau'][ix]    
 
+    # epochDur = stimInputData['duration']
+    # epochDur = [float(sec) for sec in epochDur]
+    # epochCount = getEpochCount(rawStimData=rawStimData, epochColumn=3)
+    
     epochDur = stimInputData['duration']
     epochDur = [float(sec) for sec in epochDur]
     epochCount = getEpochCount(rawStimData=rawStimData, epochColumn=3)
+
+    # ── Stripe-stimulus fix ─────────────────────────────────────────────────────
+    # The stim file has EPOCHS=1 and one duration entry, but the actual recording
+    # has one epoch per bar position.  Expand all per-epoch lists here.
+    is_stripe = (len(stimInputData.get('stimtype', [])) > 0 and
+                'stripe' in str(stimInputData['stimtype'][0]).lower())
+
+    if is_stripe and epochCount > 1:
+        bar_dur = float(stimInputData['duration'][0])
+        bg_dur_raw = stimInputData.get('bg.duration')
+        bg_dur = float(bg_dur_raw[0]) if bg_dur_raw else bar_dur
+
+        # Expand duration / stimtype to cover every actual epoch
+        stimInputData['duration'] = [bg_dur] + [bar_dur] * (epochCount - 1)
+        stimInputData['stimtype'] = ['background'] + ['stripe(s)'] * (epochCount - 1)
+        stimInputData['EPOCHS'] = epochCount
+
+        # Recompute epochDur so the rest of the function sees the full list
+        epochDur = [float(d) for d in stimInputData['duration']]
+
+        # Store bar positions for RF mapping in generate_RF_map_stripes
+        orientation = float(stimInputData['orientation'][0])
+        if orientation == 0:          # vertical bars → x-axis positions
+            pos_min = float(stimInputData['xmin'][0])
+            pos_max = float(stimInputData['xmax'][0])
+        else:                         # horizontal bars → y-axis positions
+            pos_min = float(stimInputData['ymin'][0])
+            pos_max = float(stimInputData['ymax'][0])
+        dist = float(stimInputData['distance'][0])
+        n_pos = int(round((pos_max - pos_min) / dist)) + 1
+        stimInputData['stripe_positions'] = np.linspace(pos_min, pos_max, n_pos)
+        stimInputData['stripe_orientation'] = orientation
     
     # !!!!!!!!temporal change
     
@@ -3084,8 +3120,14 @@ def select_properties_plot(rois , analysis_type):
         max_snr = ROI_mod.data_to_list(rois, ['SNR'])
         properties = ['corr_fff', 'max_response' ,'SNR','reliability']
         colormaps = ['PRGn', 'viridis','inferno','inferno']
-        vminmax = [(-1,1), (0, np.max(max_d['max_response'])),
-                   (0, np.max(max_snr['SNR'])),(0, 1)]
+        # vminmax = [(-1,1), (0, np.max(max_d['max_response'])),
+        #            (0, np.max(max_snr['SNR'])),(0, 1)]
+        snr_vals = [v for v in max_snr['SNR'] if v is not None and not np.isnan(v)]
+        snr_max  = max(snr_vals) if snr_vals else 1.0
+        vminmax  = [(-1, 1),
+                    (0, np.nanmax(max_d['max_response'])),
+                    (0, snr_max),
+                    (0, 1)]
         data_to_extract = ['stripe_gauss_fwhm', 'max_response' ,'SNR','reliability']
     
     elif ((analysis_type == 'stripes_ON_delay_profile') or \

@@ -51,7 +51,7 @@ else:
     load_categories=False 
 
 for condition in os.listdir(paths.processed):
-    if condition.endswith('_h') or condition.endswith('_v'):
+    if condition.endswith('wn_h') or condition.endswith('wn_v'):
         continue
     if condition.endswith(".pkl"):
             continue

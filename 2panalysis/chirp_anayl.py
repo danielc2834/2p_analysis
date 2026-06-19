@@ -319,7 +319,7 @@ def analyze_polarity_response(fly_segments, mean_fps, output_dir):
     
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, '7_polarity_analysis.png'), 
-                dpi=150, bbox_inches='tight')
+                dpi=300, bbox_inches='tight')
     plt.close()
     
     print(f"\n  ON response: {overall_on_mean:.4f} ± {overall_on_sem:.4f}")
@@ -459,7 +459,7 @@ def analyze_luminance_response(segment_results, fly_segments, mean_fps, output_d
     
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, '6_luminance_analysis.png'), 
-                dpi=150, bbox_inches='tight')
+                dpi=300, bbox_inches='tight')
     plt.close()
     
     print(f"\n  Mean slope: {mean_slope:.4f} ± {sem_slope:.4f}")
@@ -623,7 +623,7 @@ def analyze_contrast_response(fly_segments, mean_fps, output_dir):
     
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, '8_contrast_analysis.png'),
-                dpi=150, bbox_inches='tight')
+                dpi=300, bbox_inches='tight')
     plt.close()
     
     print(f"\n  Weber contrast range: {min(x_vals):.1f}% to {max(x_vals):.1f}%")
@@ -798,7 +798,7 @@ def analyze_frequency_response(fly_segments, mean_fps, output_dir):
     
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, '9_frequency_analysis.png'),
-                dpi=150, bbox_inches='tight')
+                dpi=300, bbox_inches='tight')
     plt.close()
     
     print(f"\n  10 frequency bins from 1-10 Hz")
@@ -946,7 +946,7 @@ def analyze_within_fly_variability(fly_segments, mean_fps, output_dir):
     
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, '10_within_fly_variability.png'),
-                dpi=150, bbox_inches='tight')
+                dpi=300, bbox_inches='tight')
     plt.close()
     
     print(f"\n  Variability analysis complete")
@@ -1075,7 +1075,7 @@ def analyze_across_fly_variability(fly_segments, mean_fps, output_dir):
     
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, '11_across_fly_variability.png'),
-                dpi=150, bbox_inches='tight')
+                dpi=300, bbox_inches='tight')
     plt.close()
     
     print(f"\n  Across-fly variability analysis complete")
@@ -1549,7 +1549,7 @@ def plot_embedding_scatter(embedding, labels, title, save_path,
         ax2.legend(markerscale=2, fontsize=8, title=hue_title); ax2.grid(True, alpha=0.2)
 
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
 
 
@@ -1642,7 +1642,8 @@ def plot_cluster_traces(traces, labels, mean_fps, stim_protocol, stim_time,
     if feature_subtitle is not None:
         full_title = f'{title}\n{feature_subtitle}'
     fig.suptitle(full_title, fontsize=12, fontweight='bold', y=1.01)
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    for ext in ['pdf', 'svg', 'png']:
+        plt.savefig(f'{save_path}.{ext}', dpi=300, bbox_inches='tight')
     plt.close()
 
 
@@ -1979,7 +1980,7 @@ def plot_cluster_dendrogram(cluster_means, title, save_path):
     ax.set_ylabel('Correlation distance', fontsize=11)
     ax.set_title(title, fontsize=13, fontweight='bold')
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
 
 
@@ -2109,7 +2110,8 @@ def plot_cluster_heatmap(traces, labels, mean_fps, title, save_path,
         ax_dend.tick_params(axis='x', labelsize=7)
 
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    for ext in ['pdf', 'svg', 'png']:
+        plt.savefig(f'{save_path}.{ext}', dpi=300, bbox_inches='tight')
     plt.close()
 
 
@@ -2195,7 +2197,7 @@ def plot_bootstrap_confusion(co_assign_mat, labels, title, save_path):
                  r'Off-diagonal = between-cluster separation',
                  fontsize=10, fontweight='bold')
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
 
 
@@ -2325,7 +2327,7 @@ def analyze_response_clustering(condition_rois, fly_rois, segments, mean_fps,
 
         plot_cluster_traces(traces, gmm_labels, mean_fps, stim_protocol, stim_time,
             title=f'Condition | {fset} | GMM (k={best_k_gmm})',
-            save_path=os.path.join(output_dir, f'clustering_traces_gmm_{pfx}.png'),
+            save_path=os.path.join(output_dir, f'clustering_traces_gmm_{pfx}'),
             seg_window=_seg_window(fset), feature_subtitle=_subtitle(fset),
             ylim=_ylim(fset))
 
@@ -2347,14 +2349,14 @@ def analyze_response_clustering(condition_rois, fly_rois, segments, mean_fps,
         # Heatmap 1: raw ΔF/F (amplitude preserved) / peak-norm for spca
         plot_cluster_heatmap(traces, gmm_labels, mean_fps,
             title=f'Condition | {fset} | GMM heatmap (k={best_k_gmm})',
-            save_path=os.path.join(output_dir, f'clustering_heatmap_gmm_{pfx}.png'),
+            save_path=os.path.join(output_dir, f'clustering_heatmap_gmm_{pfx}'),
             cluster_means=cmeans if len(cmeans) > 1 else None,
             normalize=_do_norm)
 
         # Heatmap 2: z-scored traces — shape only, amplitude removed
         plot_cluster_heatmap(traces, gmm_labels, mean_fps,
             title=f'Condition | {fset} | GMM heatmap Z-scored (k={best_k_gmm})',
-            save_path=os.path.join(output_dir, f'clustering_heatmap_gmm_{pfx}_zscore.png'),
+            save_path=os.path.join(output_dir, f'clustering_heatmap_gmm_{pfx}_zscore'),
             cluster_means=cmeans_z if len(cmeans_z) > 1 else None,
             normalize='zscore')
 
@@ -2512,7 +2514,7 @@ def plot_roi_repetitions(roi_accumulator, qi_pass, mean_fps,
         plt.tight_layout()
         plt.savefig(os.path.join(output_dir,
                     f'0_roi_repetitions_{fly_id}.png'),
-                    dpi=150, bbox_inches='tight')
+                    dpi=300, bbox_inches='tight')
         plt.close()
         print(f"  FlyID {fly_id}: plotted ROI {chosen_roi_idx} "
               f"({n_reps} reps, QI={qi_val:.3f})")
@@ -2672,7 +2674,7 @@ def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=No
         ax.legend(); ax.grid(True, alpha=0.3)
         plt.tight_layout()
         plt.savefig(os.path.join(output_dir, 'clustering_qi_distribution.png'),
-                    dpi=150, bbox_inches='tight')
+                    dpi=300, bbox_inches='tight')
         plt.close()
 
     # ---- Build QI-filtered means and feed all downstream analyses ----------
@@ -2708,7 +2710,7 @@ def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=No
         )
         plt.savefig(os.path.join(output_dir,
                     f'1_tseries_{ts_idx:03d}_{tseries_key}.png'),
-                    dpi=150, bbox_inches='tight')
+                    dpi=300, bbox_inches='tight')
         plt.close()
 
         tseries_means[tseries_key] = (mean_trace, time, fly_id)
@@ -2787,7 +2789,7 @@ def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=No
             ylim=ylims.get('full') if ylims else None
         )
         plt.savefig(os.path.join(output_dir, f'2_fly_{fly_id}.png'), 
-                    dpi=150, bbox_inches='tight')
+                    dpi=300, bbox_inches='tight')
         plt.close()
         
         fly_averaged_traces[fly_id] = (mean_trace, common_time)
@@ -2810,7 +2812,7 @@ def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=No
         ylim=ylims.get('full') if ylims else None
     )
     plt.savefig(os.path.join(output_dir, f'3_global_average.png'), 
-                dpi=150, bbox_inches='tight')
+                dpi=300, bbox_inches='tight')
     plt.close()
     
     print("\n" + "="*60)
@@ -2861,7 +2863,7 @@ def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=No
                 ylim=seg_ylim
             )
             plt.savefig(os.path.join(output_dir, f'4_{seg_name}_fly_{fly_id}.png'), 
-                        dpi=150, bbox_inches='tight')
+                        dpi=300, bbox_inches='tight')
             plt.close()
         
         # Global average for this segment
@@ -2886,7 +2888,7 @@ def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=No
             )
             plt.savefig(os.path.join(output_dir,
                         f'5a_{seg_name}_global_rois.png'),
-                        dpi=150, bbox_inches='tight')
+                        dpi=300, bbox_inches='tight')
             plt.close()
 
         # ── Plot 5b: per-fly averages + global mean from fly averages ─────────
@@ -2910,7 +2912,7 @@ def process_pkl_file(pkl_path, metadata, multi, degen, mean_fps, original_fps=No
             )
             plt.savefig(os.path.join(output_dir,
                         f'5b_{seg_name}_global_flies.png'),
-                        dpi=150, bbox_inches='tight')
+                        dpi=300, bbox_inches='tight')
             plt.close()
 
         print(f"  - {len(fly_segments[seg_name])} fly plots")
@@ -3030,7 +3032,7 @@ def plot_cross_type_umap(all_results, condition_names, segments, output_dir):
                  fontweight='bold', y=1.01)
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, 'combined_cross_type_umap.png'),
-                dpi=150, bbox_inches='tight')
+                dpi=300, bbox_inches='tight')
     plt.close()
     print("  Cross-type UMAP saved.")
 
@@ -3160,7 +3162,7 @@ def plot_functional_fingerprint(all_results, condition_names, output_dir):
                  fontweight='bold', y=1.02)
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, 'combined_functional_fingerprint.png'),
-                dpi=150, bbox_inches='tight')
+                dpi=300, bbox_inches='tight')
     plt.close()
     print("  Functional fingerprint saved.")
 
@@ -3259,7 +3261,7 @@ def plot_combined_analysis(all_results, pkl_files, output_dir):
     
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, 'combined_luminance_analysis.png'),
-                dpi=150, bbox_inches='tight')
+                dpi=300, bbox_inches='tight')
     plt.close()
     
     # ============== POLARITY COMBINED PLOT ==============
@@ -3313,7 +3315,7 @@ def plot_combined_analysis(all_results, pkl_files, output_dir):
     
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, 'combined_polarity_analysis.png'),
-                dpi=150, bbox_inches='tight')
+                dpi=300, bbox_inches='tight')
     plt.close()
     
      # ============== COMBINED SEGMENT TRACES ==============
@@ -3373,7 +3375,7 @@ def plot_combined_analysis(all_results, pkl_files, output_dir):
         
         plt.tight_layout()
         plt.savefig(os.path.join(output_dir, f'combined_segment_{seg_name}.png'),
-                    dpi=150, bbox_inches='tight')
+                    dpi=300, bbox_inches='tight')
         plt.close()
     
     print("  Combined segment traces saved!")
@@ -3401,7 +3403,7 @@ def plot_combined_analysis(all_results, pkl_files, output_dir):
     
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, 'combined_frequency_analysis.png'),
-                dpi=150, bbox_inches='tight')
+                dpi=300, bbox_inches='tight')
     plt.close()
 
     # ============== WITHIN-FLY VARIABILITY COMBINED PLOT ==============
@@ -3450,7 +3452,7 @@ def plot_combined_analysis(all_results, pkl_files, output_dir):
     ax2.legend(fontsize=9)
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, 'combined_within_fly_variability_bar.png'),
-                dpi=150, bbox_inches='tight')
+                dpi=300, bbox_inches='tight')
     plt.close()
     fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
     
@@ -3488,7 +3490,7 @@ def plot_combined_analysis(all_results, pkl_files, output_dir):
     
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, 'combined_within_fly_variability_scatter.png'),
-                dpi=150, bbox_inches='tight')
+                dpi=300, bbox_inches='tight')
     plt.close()
     
     print("  Combined variability analysis saved!")
@@ -3537,7 +3539,7 @@ def plot_combined_analysis(all_results, pkl_files, output_dir):
     ax2.legend(fontsize=9)
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, 'combined_across_fly_variability_bar.png'),
-                dpi=150, bbox_inches='tight')
+                dpi=300, bbox_inches='tight')
     plt.close()
     
     print("  Combined across-fly variability analysis saved!")
@@ -3586,7 +3588,7 @@ def plot_combined_analysis(all_results, pkl_files, output_dir):
     
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, 'combined_contrast_analysis.png'),
-                dpi=150, bbox_inches='tight')
+                dpi=300, bbox_inches='tight')
     plt.close()
     
     print("  Combined plots saved!")
@@ -3611,9 +3613,10 @@ if __name__ == "__main__":
         # pkl_files = [r"D:\Christian\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_ON_500_LO_Y.pkl", r"D:\Christian\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_OFF_LO_Y.pkl"]
         pkl_files = [r"D:\Christian\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_ON_500_LOP_Y.pkl", r"D:\Christian\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_OFF_LOP_Y.pkl"]
     elif degen:
-        # pkl_files = [r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Mi1_chirp.pkl", r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Mi4_chirp.pkl", r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Mi9_chirp.pkl"]
-        pkl_files = [r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Tm1_chirp.pkl", r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Tm4_chirp.pkl", r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Tm9_chirp.pkl",\
-                     r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Mi1_chirp.pkl", r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Mi4_chirp.pkl", r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Mi9_chirp.pkl"]
+        # pkl_files = [r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Tm1_chirp.pkl", r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Tm9_chirp.pkl"]
+        pkl_files = [r"C:\phd\02_twophoton\250730_degen_var\3_DATA\_Tm1_chirp.pkl", r"C:\phd\02_twophoton\250730_degen_var\3_DATA\_Tm9_chirp.pkl"]
+        # pkl_files = [r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Tm1_chirp.pkl", r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Tm4_chirp.pkl", r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Tm9_chirp.pkl",\
+        #              r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Mi1_chirp.pkl", r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Mi4_chirp.pkl", r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Mi9_chirp.pkl"]
 
     # ---------------------------------------------------------------
     # X-axis limits per pkl file.
@@ -3647,8 +3650,10 @@ if __name__ == "__main__":
             metadata = pd.read_excel("D:/Christian/02_twophoton/metadata.xlsx", sheet_name='251023_tdc2_cschr_pan')
             output_dir=f"D:/Christian/02_twophoton/251023_tdc2_cschr_pan/4_results/{folder}"
         elif degen:
-            metadata = pd.read_excel("D:/Christian/02_twophoton/metadata.xlsx", sheet_name='250730_degen_var')
-            output_dir=f"D:/Christian/02_twophoton/250730_degen_var/4_results/{folder}"
+            # metadata = pd.read_excel("D:/Christian/02_twophoton/metadata.xlsx", sheet_name='250730_degen_var')
+            # output_dir=f"D:/Christian/02_twophoton/250730_degen_var/4_results/{folder}"
+            metadata = pd.read_excel("C:/phd/02_twophoton/metadata.xlsx", sheet_name='250730_degen_var')
+            output_dir=f"C:/phd/02_twophoton/250730_degen_var/4_results/{folder}"
         os.makedirs(output_dir, exist_ok=True)
         mean_fps = pd.to_numeric(metadata['fps'], errors='coerce').dropna()
         mean_fps = mean_fps[mean_fps.between(1, 200)].mean()

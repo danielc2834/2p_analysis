@@ -51,7 +51,9 @@ else:
     load_categories=False 
 
 for condition in os.listdir(paths.processed):
-    if condition.endswith('wn_h') or condition.endswith('wn_v'):
+    # if condition.endswith('wn_h') or condition.endswith('wn_v'):
+    #     continue
+    if 'bar' not in condition:
         continue
     if condition.endswith(".pkl"):
             continue
@@ -295,9 +297,9 @@ for condition in os.listdir(paths.processed):
                         
                         
                             
-                            (wholeTraces_allTrials_ROIs, respTraces_allTrials_ROIs,
-                            baselineTraces_allTrials_ROIs) = \
-                                pmc.separate_trials_ROI_v4(currentTseries,rois,rois[0].stim_info,
+                            # (wholeTraces_allTrials_ROIs, respTraces_allTrials_ROIs,
+                            # baselineTraces_allTrials_ROIs) = \
+                            rois =  pmc.separate_trials_ROI_v4(currentTseries,rois,rois[0].stim_info,
                                                         rois[0].imaging_info['frame_rate'],
                                                         df_method = analysis_params['deltaF_method'][cycle],mov_av=False,analysis_type=analysis_params['analysis_type'][cycle])
                         else:
@@ -349,11 +351,11 @@ for condition in os.listdir(paths.processed):
                         
                         
                                     
-                        final_rois = pmc.run_analysis(analysis_params,rois,experiment_conditions,
-                                                    imaging_information,summary_save_dir, cycle, expected_polarity, mean_image,
-                                                    save_fig=True,fig_save_dir = figure_save_dir,
-                                                    exp_ID=('%s_%s' % (target,extraction_params['type'])),
-                                                    df_method=analysis_params['deltaF_method'][cycle], keep_prev=False,use_rel_filter=True,reliability_filter=0.4,CSI_filter=0.4,position_filter=True,direction_filter=True,expdir='',  stim_dir = '')
+                        # final_rois = pmc.run_analysis(analysis_params,rois,experiment_conditions,
+                        #                             imaging_information,summary_save_dir, cycle, expected_polarity, mean_image,
+                        #                             save_fig=True,fig_save_dir = figure_save_dir,
+                        #                             exp_ID=('%s_%s' % (target,extraction_params['type'])),
+                        #                             df_method=analysis_params['deltaF_method'][cycle], keep_prev=False,use_rel_filter=True,reliability_filter=0.4,CSI_filter=0.4,position_filter=True,direction_filter=True,expdir='',  stim_dir = '')
 
                         
                         
@@ -361,17 +363,17 @@ for condition in os.listdir(paths.processed):
                         ######### create visualizations #############            
                         ###########################################
                         # >> put into analysis script
-                        images = []
-                        (properties, colormaps, vminmax, data_to_extract) = \
-                            pmc.select_properties_plot(final_rois , analysis_params['analysis_type'][cycle])
-                        if properties is not None:
-                            for prop in properties:
-                                images.append(ROI_mod.generate_colorMasks_properties(final_rois, prop, cycle=cycle))
-                            ##TODO plot only csi for on clusters and off cluster separate
-                            pmc.plot_roi_properties(images, properties, colormaps, mean_image,
-                                                    vminmax,tseries, imaging_information['depth'],
-                                                    save_fig=True, save_dir=target,figsize=(16, 12),
-                                                    alpha=0.5)
+                        # images = []
+                        # (properties, colormaps, vminmax, data_to_extract) = \
+                        #     pmc.select_properties_plot(final_rois , analysis_params['analysis_type'][cycle])
+                        # if properties is not None:
+                        #     for prop in properties:
+                        #         images.append(ROI_mod.generate_colorMasks_properties(final_rois, prop, cycle=cycle))
+                        #     ##TODO plot only csi for on clusters and off cluster separate
+                        #     pmc.plot_roi_properties(images, properties, colormaps, mean_image,
+                        #                             vminmax,tseries, imaging_information['depth'],
+                        #                             save_fig=True, save_dir=target,figsize=(16, 12),
+                        #                             alpha=0.5)
                         
                         
                         
@@ -493,7 +495,8 @@ for condition in os.listdir(paths.processed):
                         all_rois = pd.concat([all_rois, data_new], axis=1)
                     all_rois.to_csv(f'{target}_ROIS.csv', mode='w')
                     if save_data[cycle]:
-                        save_dict={'final_rois':final_rois}
+                        # save_dict={'final_rois':final_rois}
+                        save_dict={'final_rois':rois}
                         save_name = f"{target}_ROIS.pkl"
                         # os.makedirs(target, exist_ok=True)
                         with open(save_name, "wb") as fout:

@@ -1355,7 +1355,242 @@ def clusters_restrict_size_regions(rois,cluster_1d_max_size_pixel,
     
     return separated_rois, sep_masks_image
         
-
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from pathlib import Path
+ 
+ 
+# ===========================================================================
+# STEP 1: Parse stimulus output file
+# ===========================================================================
+ 
+def parse_stim_output(stim_file):
+    """
+    Parse pyVisualStim output file and extract stimulus event timing.
+    
+    Returns
+    -------
+    events_df : pd.DataFrame
+        Columns: boutInd, round, stim_onset_s, stim_offset_s, bar_ypos_deg
+    """
+    df = pd.read_csv(stim_file, skiprows=2, skipinitialspace=True)
+    df.columns = df.columns.str.strip()
+    
+    # Bar position lookup (constant per boutInd)
+    bar_pos_map = df[df['xpos'].notna()].groupby('boutInd')['ypos'].first().to_dict()
+    
+    # Extract contiguous bout blocks
+    prev_bout = None
+    events = []
+    block_start_time = None
+    
+    for _, row in df.iterrows():
+        bout = row['boutInd']
+        if bout != prev_bout:
+            if prev_bout is not None:
+                events.append({
+                    'boutInd': prev_bout,
+                    'stim_onset_s': block_start_time,
+                    'end_time_s': row['tcurr'],
+                    'bar_ypos_deg': bar_pos_map.get(prev_bout, np.nan)
+                })
+            block_start_time = row['tcurr']
+            prev_bout = bout
+    
+    # Last block
+    events.append({
+        'boutInd': prev_bout,
+        'stim_onset_s': block_start_time,
+        'end_time_s': df['tcurr'].iloc[-1],
+        'bar_ypos_deg': bar_pos_map.get(prev_bout, np.nan)
+    })
+    
+    events_df = pd.DataFrame(events)
+    events_df['stim_offset_s'] = events_df['stim_onset_s'] + 1.0  # 1s bar on
+    events_df['bg_offset_s']   = events_df['stim_onset_s'] + 2.0  # 1s background
+    events_df['round'] = np.arange(len(events_df)) // 34 + 1
+    
+    # Drop events without a bar position (boutInd 35 = incomplete last bout)
+    events_df = events_df[events_df['bar_ypos_deg'].notna()].copy()
+    events_df['bar_ypos_deg'] = events_df['bar_ypos_deg'].round(4)
+    
+    print(f"[Stimulus] {len(events_df)} events, {events_df['bar_ypos_deg'].nunique()} positions, "
+          f"{events_df.groupby('bar_ypos_deg').size().mean():.1f} repeats/position")
+    
+    return events_df
+ 
+ 
+# ===========================================================================
+# STEP 2: Extract per-trial calcium responses
+# ===========================================================================
+ 
+def extract_trial_responses(
+    dff,                 # (n_rois, n_frames) numpy array
+    imaging_times,       # (n_frames,) array of timestamps in seconds
+    events_df,           # output of parse_stim_output()
+    pre_s=0.5,           # seconds before stimulus onset to include
+    post_s=2.0,          # seconds after stimulus onset to include
+    baseline_pre_s=0.5,  # use this many seconds before onset for baseline subtraction
+):
+    """
+    For each stimulus event, extract a time window of dF/F.
+    Optionally subtract a pre-stimulus baseline.
+    
+    Returns
+    -------
+    trials : dict {bar_pos: array of shape (n_rois, n_repeats, n_timepoints)}
+    time_axis : 1D array of time relative to stimulus onset
+    """
+    n_rois, n_frames = dff.shape
+    dt = np.median(np.diff(imaging_times))
+    n_pre  = int(round(pre_s / dt))
+    n_post = int(round(post_s / dt))
+    n_base = int(round(baseline_pre_s / dt))
+    n_window = n_pre + n_post
+    time_axis = np.arange(-n_pre, n_post) * dt
+    
+    trials = {}  # {position: list of (n_rois, n_timepoints)}
+    
+    for _, ev in events_df.iterrows():
+        pos = ev['bar_ypos_deg']
+        onset_idx = np.searchsorted(imaging_times, ev['stim_onset_s'])
+        
+        i_start = onset_idx - n_pre
+        i_end   = onset_idx + n_post
+        
+        if i_start < 0 or i_end > n_frames:
+            continue  # skip incomplete trials at edges
+        
+        snippet = dff[:, i_start:i_end].copy()  # (n_rois, n_window)
+        
+        # Baseline subtraction using pre-stimulus period
+        if n_base > 0:
+            baseline = snippet[:, :n_base].mean(axis=1, keepdims=True)
+            snippet = snippet - baseline
+        
+        if pos not in trials:
+            trials[pos] = []
+        trials[pos].append(snippet)
+    
+    # Stack repeats: {pos: (n_rois, n_repeats, n_timepoints)}
+    for pos in trials:
+        trials[pos] = np.stack(trials[pos], axis=1)
+    
+    return trials, time_axis
+ 
+ 
+# ===========================================================================
+# STEP 3: Compute receptive field (mean response per position)
+# ===========================================================================
+ 
+def compute_receptive_field(trials, response_window_s=(0.0, 1.5), dt=None, time_axis=None):
+    """
+    Average dF/F over the response window for each bar position.
+    
+    Returns
+    -------
+    bar_positions : sorted array of bar positions in degrees
+    rf_mean : (n_rois, n_positions) mean response
+    rf_sem  : (n_rois, n_positions) SEM across repeats
+    """
+    bar_positions = sorted(trials.keys())
+    n_rois = list(trials.values())[0].shape[0]
+    n_pos = len(bar_positions)
+    
+    rf_mean = np.zeros((n_rois, n_pos))
+    rf_sem  = np.zeros((n_rois, n_pos))
+    
+    for j, pos in enumerate(bar_positions):
+        arr = trials[pos]  # (n_rois, n_repeats, n_timepoints)
+        
+        # Find time indices for response window
+        if time_axis is not None:
+            t0, t1 = response_window_s
+            tidx = np.where((time_axis >= t0) & (time_axis <= t1))[0]
+            arr_win = arr[:, :, tidx]
+        else:
+            arr_win = arr
+        
+        # Mean over time, then mean/sem over repeats
+        trial_means = arr_win.mean(axis=2)  # (n_rois, n_repeats)
+        rf_mean[:, j] = trial_means.mean(axis=1)
+        rf_sem[:, j]  = trial_means.std(axis=1) / np.sqrt(trial_means.shape[1])
+    
+    return np.array(bar_positions), rf_mean, rf_sem
+ 
+ 
+# ===========================================================================
+# STEP 4: Plotting
+# ===========================================================================
+ 
+def plot_receptive_fields(bar_positions, rf_mean, rf_sem, roi_labels=None,
+                          save_path=None, n_cols=4):
+    """
+    Plot receptive fields for all ROIs.
+    """
+    n_rois = rf_mean.shape[0]
+    n_cols = min(n_cols, n_rois)
+    n_rows = int(np.ceil(n_rois / n_cols))
+    
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(3.5 * n_cols, 2.8 * n_rows),
+                             sharex=True)
+    axes = np.array(axes).flatten()
+    
+    for i in range(n_rois):
+        ax = axes[i]
+        label = roi_labels[i] if roi_labels else f'ROI {i+1}'
+        ax.fill_between(bar_positions,
+                        rf_mean[i] - rf_sem[i],
+                        rf_mean[i] + rf_sem[i],
+                        alpha=0.3, color='steelblue')
+        ax.plot(bar_positions, rf_mean[i], 'o-', color='steelblue',
+                markersize=4, linewidth=1.5)
+        ax.axhline(0, color='k', linewidth=0.8, linestyle='--')
+        ax.set_title(label, fontsize=9)
+        ax.set_xlabel('Bar position (°)', fontsize=8)
+        ax.set_ylabel('ΔF/F', fontsize=8)
+        ax.tick_params(labelsize=7)
+    
+    # Hide unused axes
+    for i in range(n_rois, len(axes)):
+        axes[i].set_visible(False)
+    
+    fig.suptitle('Spatial Receptive Fields (horizontal bar stimulus)', fontsize=11)
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Saved: {save_path}")
+    
+    return fig
+ 
+ 
+def plot_trial_heatmaps(bar_positions, rf_mean, save_path=None):
+    """
+    Plot all ROIs as a heatmap (ROIs x positions).
+    """
+    fig, ax = plt.subplots(figsize=(10, max(4, len(rf_mean) * 0.3 + 1)))
+    
+    # Normalize each ROI to its peak for display
+    vmax = np.abs(rf_mean).max(axis=1, keepdims=True)
+    vmax[vmax == 0] = 1
+    rf_norm = rf_mean / vmax
+    
+    im = ax.imshow(rf_norm, aspect='auto', cmap='RdBu_r', vmin=-1, vmax=1,
+                   extent=[bar_positions[0], bar_positions[-1], len(rf_mean)+0.5, 0.5])
+    plt.colorbar(im, ax=ax, label='norm. ΔF/F')
+    ax.set_xlabel('Bar position (°)', fontsize=10)
+    ax.set_ylabel('ROI', fontsize=10)
+    ax.set_title('Receptive fields — all ROIs (normalized per ROI)', fontsize=11)
+    ax.set_yticks(np.arange(1, len(rf_mean)+1))
+    ax.set_yticklabels([f'ROI {i+1}' for i in range(len(rf_mean))], fontsize=7)
+    
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Saved: {save_path}")
+    return fig
 
 def separate_trials_ROI_v3(time_series,rois,stimulus_information,
                            frameRate, df_method, df_use = True, plotting=False,
@@ -1679,266 +1914,269 @@ def separate_trials_ROI_v4(time_series,rois,stimulus_information,frameRate,
     print('\n Background subtraction done...')
     print('df/f method: %s'%(df_method))
     plt.close('all')
-    trialCoor = stimulus_information['trial_coordinates']
-    # Trial averaging by loooping through epochs and trials
-    if 'STRF' in analysis_type:
-        for roi in rois:
-            #period = roi.imaging_info['FramePeriod']  
-            start_of_stim_frame = roi.stim_info['trial_coordinates'][0][0][0]
-            #len_subepoch = roi.stim_info['tau'][0]
-            #subepoch_frames = int(np.floor(len_subepoch/period))
-
-            trace = roi.df_trace[start_of_stim_frame:]
-            roi.white_noise_response = trace
-        return None,None,None
     
-    if 'Frozen' in analysis_type:
-        for roi in rois:    
-            #period = roi.imaging_info['FramePeriod']  
-            start_of_stim_frame = roi.stim_info['trial_coordinates'][0][0][0]
-            #len_subepoch = roi.stim_info['tau'][0]
-            #subepoch_frames = int(np.floor(len_subepoch/period))
+    return rois
+    
+    # trialCoor = stimulus_information['trial_coordinates']
+    # # Trial averaging by loooping through epochs and trials
+    # if 'STRF' in analysis_type:
+    #     for roi in rois:
+    #         #period = roi.imaging_info['FramePeriod']  
+    #         start_of_stim_frame = roi.stim_info['trial_coordinates'][0][0][0]
+    #         #len_subepoch = roi.stim_info['tau'][0]
+    #         #subepoch_frames = int(np.floor(len_subepoch/period))
 
-            trace = roi.df_trace[start_of_stim_frame:]
-            roi.white_noise_response = trace
-        
-        return None,None,None
+    #         trace = roi.df_trace[start_of_stim_frame:]
+    #         roi.white_noise_response = trace
+    #     return None,None,None
+    
+    # if 'Frozen' in analysis_type:
+    #     for roi in rois:    
+    #         #period = roi.imaging_info['FramePeriod']  
+    #         start_of_stim_frame = roi.stim_info['trial_coordinates'][0][0][0]
+    #         #len_subepoch = roi.stim_info['tau'][0]
+    #         #subepoch_frames = int(np.floor(len_subepoch/period))
 
-    for iEpoch in trialCoor:
+    #         trace = roi.df_trace[start_of_stim_frame:]
+    #         roi.white_noise_response = trace
         
-        currentEpoch = trialCoor[iEpoch]
-        current_epoch_dur = stimulus_information['duration'][iEpoch]
-        trial_numbers = len(currentEpoch)
-        trial_lens = []
-        resp_lens = []
-        base_lens = []
-        for curr_trial_coor in currentEpoch:
-            current_trial_length = curr_trial_coor[0][1]-curr_trial_coor[0][0]
-            # current_trial_length = curr_trial_coor[1]-curr_trial_coor[0]
-            trial_lens.append(current_trial_length)
-            
-            baselineStart = curr_trial_coor[1][0]
-            baselineEnd = curr_trial_coor[1][1]
-            base_len = baselineEnd - baselineStart
-            
-            base_lens.append(base_len) 
-            
-            resp_start = curr_trial_coor[0][0]+base_len
-            resp_end = curr_trial_coor[0][1]-base_len
-            resp_lens.append(resp_end-resp_start)
+    #     return None,None,None
+
+    # for iEpoch in trialCoor:
         
-        trial_len =  min(trial_lens)
-        resp_len = min(resp_lens)
-        base_len = min(base_lens)
-        
-        if not((max_resp_trial_len == 'max') or \
-               (current_epoch_dur < max_resp_trial_len)):
-            resp_len = int(round(frameRate * max_resp_trial_len))+1
+    #     currentEpoch = trialCoor[iEpoch]
+    #     current_epoch_dur = stimulus_information['duration'][iEpoch]
+    #     trial_numbers = len(currentEpoch)
+    #     trial_lens = []
+    #     resp_lens = []
+    #     base_lens = []
+    #     for curr_trial_coor in [currentEpoch]:
+    #         current_trial_length = curr_trial_coor[0][1]-curr_trial_coor[0][0]
+    #         # current_trial_length = curr_trial_coor[1]-curr_trial_coor[0]
+    #         trial_lens.append(current_trial_length)
             
-        wholeTraces_allTrials_ROIs[iEpoch] = {}
-        respTraces_allTrials_ROIs[iEpoch] = {}
-        baselineTraces_allTrials_ROIs[iEpoch] = {}
+    #         baselineStart = curr_trial_coor[1][0]
+    #         baselineEnd = curr_trial_coor[1][1]
+    #         base_len = baselineEnd - baselineStart
+            
+    #         base_lens.append(base_len) 
+            
+    #         resp_start = curr_trial_coor[0][0]+base_len
+    #         resp_end = curr_trial_coor[0][1]-base_len
+    #         resp_lens.append(resp_end-resp_start)
+        
+    #     trial_len =  min(trial_lens)
+    #     resp_len = min(resp_lens)
+    #     base_len = min(base_lens)
+        
+    #     if not((max_resp_trial_len == 'max') or \
+    #            (current_epoch_dur < max_resp_trial_len)):
+    #         resp_len = int(round(frameRate * max_resp_trial_len))+1
+            
+    #     wholeTraces_allTrials_ROIs[iEpoch] = {}
+    #     respTraces_allTrials_ROIs[iEpoch] = {}
+    #     baselineTraces_allTrials_ROIs[iEpoch] = {}
    
-        for iCluster, roi in enumerate(rois):
-            if iCluster==0 and iEpoch==2:
-                'flaggg'
-            # Baseline epoch is presented only when random value = 0 and 1 
-            if stimulus_information['random'] == 1:
-                wholeTraces_allTrials_ROIs[iEpoch][iCluster] = np.zeros(shape=(trial_len,
-                                                         trial_numbers))
-                respTraces_allTrials_ROIs[iEpoch][iCluster] = np.zeros(shape=(resp_len,
-                                                         trial_numbers))
-                baselineTraces_allTrials_ROIs[iEpoch][iCluster] = np.zeros(shape=(base_len,
-                                                         trial_numbers))
-            elif stimulus_information['random'] == 0:
-                wholeTraces_allTrials_ROIs[iEpoch][iCluster] = np.zeros(shape=(trial_len,
-                                                         trial_numbers))
-                respTraces_allTrials_ROIs[iEpoch][iCluster] = np.zeros(shape=(trial_len,
-                                                         trial_numbers))
-                base_len  = np.shape(wholeTraces_allTrials_ROIs\
-                                     [stimulus_information['baseline_epoch']]\
-                                     [iCluster])[0]
-                #baselineTraces_allTrials_ROIs[iEpoch][iCluster] = np.zeros(shape=(int(frameRate*1.5),
-                #                   trial_numbers))
-            else:
-                wholeTraces_allTrials_ROIs[iEpoch][iCluster] = np.zeros(shape=(trial_len,
-                                                         trial_numbers))
-                respTraces_allTrials_ROIs[iEpoch][iCluster] = np.zeros(shape=(trial_len,
-                                                         trial_numbers))
-                baselineTraces_allTrials_ROIs[iEpoch][iCluster] = np.zeros(shape=(base_len,
-                                                         trial_numbers))
+    #     for iCluster, roi in enumerate(rois):
+    #         if iCluster==0 and iEpoch==2:
+    #             'flaggg'
+    #         # Baseline epoch is presented only when random value = 0 and 1 
+    #         if stimulus_information['random'] == 1:
+    #             wholeTraces_allTrials_ROIs[iEpoch][iCluster] = np.zeros(shape=(trial_len,
+    #                                                      trial_numbers))
+    #             respTraces_allTrials_ROIs[iEpoch][iCluster] = np.zeros(shape=(resp_len,
+    #                                                      trial_numbers))
+    #             baselineTraces_allTrials_ROIs[iEpoch][iCluster] = np.zeros(shape=(base_len,
+    #                                                      trial_numbers))
+    #         elif stimulus_information['random'] == 0:
+    #             wholeTraces_allTrials_ROIs[iEpoch][iCluster] = np.zeros(shape=(trial_len,
+    #                                                      trial_numbers))
+    #             respTraces_allTrials_ROIs[iEpoch][iCluster] = np.zeros(shape=(trial_len,
+    #                                                      trial_numbers))
+    #             base_len  = np.shape(wholeTraces_allTrials_ROIs\
+    #                                  [stimulus_information['baseline_epoch']]\
+    #                                  [iCluster])[0]
+    #             #baselineTraces_allTrials_ROIs[iEpoch][iCluster] = np.zeros(shape=(int(frameRate*1.5),
+    #             #                   trial_numbers))
+    #         else:
+    #             wholeTraces_allTrials_ROIs[iEpoch][iCluster] = np.zeros(shape=(trial_len,
+    #                                                      trial_numbers))
+    #             respTraces_allTrials_ROIs[iEpoch][iCluster] = np.zeros(shape=(trial_len,
+    #                                                      trial_numbers))
+    #             baselineTraces_allTrials_ROIs[iEpoch][iCluster] = np.zeros(shape=(base_len,
+    #                                                      trial_numbers))
             
-            for trial_num , current_trial_coor in enumerate(currentEpoch):
+    #         for trial_num , current_trial_coor in enumerate([currentEpoch]):
                 
-                if stimulus_information['random'] == 1:
-                    trialStart = current_trial_coor[0][0]
-                    trialEnd = current_trial_coor[0][1]
+    #             if stimulus_information['random'] == 1:
+    #                 trialStart = current_trial_coor[0][0]
+    #                 trialEnd = current_trial_coor[0][1]
                     
-                    baselineStart = current_trial_coor[1][0]
-                    baselineEnd = current_trial_coor[1][1]
+    #                 baselineStart = current_trial_coor[1][0]
+    #                 baselineEnd = current_trial_coor[1][1]
                     
-                    respStart = current_trial_coor[1][1]
-                    epochEnd = current_trial_coor[0][1]
+    #                 respStart = current_trial_coor[1][1]
+    #                 epochEnd = current_trial_coor[0][1]
                     
-                    if df_use:
-                        roi_whole_trace = roi.df_trace[trialStart:trialEnd]
-                        roi_resp = roi.df_trace[respStart:epochEnd]
-                    else:
-                        roi_whole_trace = roi.raw_trace[trialStart:trialEnd]
-                        roi_resp = roi.raw_trace[respStart:epochEnd]
-                    try:
-                        wholeTraces_allTrials_ROIs[iEpoch][iCluster][:,trial_num]= roi_whole_trace[:trial_len]
-                    except ValueError:
-                        new_trace = np.full((trial_len,),np.nan)
-                        new_trace[:len(roi_whole_trace)] = roi_whole_trace.copy()
-                        wholeTraces_allTrials_ROIs[iEpoch][iCluster][:,trial_num]= new_trace
+    #                 if df_use:
+    #                     roi_whole_trace = roi.df_trace[trialStart:trialEnd]
+    #                     roi_resp = roi.df_trace[respStart:epochEnd]
+    #                 else:
+    #                     roi_whole_trace = roi.raw_trace[trialStart:trialEnd]
+    #                     roi_resp = roi.raw_trace[respStart:epochEnd]
+    #                 try:
+    #                     wholeTraces_allTrials_ROIs[iEpoch][iCluster][:,trial_num]= roi_whole_trace[:trial_len]
+    #                 except ValueError:
+    #                     new_trace = np.full((trial_len,),np.nan)
+    #                     new_trace[:len(roi_whole_trace)] = roi_whole_trace.copy()
+    #                     wholeTraces_allTrials_ROIs[iEpoch][iCluster][:,trial_num]= new_trace
                             
-                    respTraces_allTrials_ROIs[iEpoch][iCluster][:,trial_num]= roi_resp[:resp_len]
-                    baselineTraces_allTrials_ROIs[iEpoch][iCluster][:,trial_num]= roi_whole_trace[:base_len]
-                elif stimulus_information['random'] == 0:
+    #                 respTraces_allTrials_ROIs[iEpoch][iCluster][:,trial_num]= roi_resp[:resp_len]
+    #                 baselineTraces_allTrials_ROIs[iEpoch][iCluster][:,trial_num]= roi_whole_trace[:base_len]
+    #             elif stimulus_information['random'] == 0:
                     
-                    # If the sequence is non random  the trials are just separated without any baseline
-                    trialStart = current_trial_coor[0][0]
-                    trialEnd = current_trial_coor[0][1]
+    #                 # If the sequence is non random  the trials are just separated without any baseline
+    #                 trialStart = current_trial_coor[0][0]
+    #                 trialEnd = current_trial_coor[0][1]
                     
-                    if df_use:
-                        roi_whole_trace = roi.df_trace[trialStart:trialEnd]
-                    else:
-                        roi_whole_trace = roi.raw_trace[trialStart:trialEnd]
+    #                 if df_use:
+    #                     roi_whole_trace = roi.df_trace[trialStart:trialEnd]
+    #                 else:
+    #                     roi_whole_trace = roi.raw_trace[trialStart:trialEnd]
                         
                     
-                    # if iEpoch == stimulus_information['baseline_epoch']:
-                    #     baseline_trace = roi_whole_trace[:base_len]
-                    #     baseline_trace = baseline_trace[-int(frameRate*1.5):]
-                    #     #baselineTraces_allTrials_ROIs[iEpoch][iCluster][:,trial_num]= baseline_trace
-                    # else:
-                    #     baselineTraces_allTrials_ROIs[iEpoch][iCluster]\
-                    #         [:,trial_num]= baselineTraces_allTrials_ROIs\
-                    #         [stimulus_information['baseline_epoch']][iCluster]\
-                    #         [:,trial_num]
+    #                 # if iEpoch == stimulus_information['baseline_epoch']:
+    #                 #     baseline_trace = roi_whole_trace[:base_len]
+    #                 #     baseline_trace = baseline_trace[-int(frameRate*1.5):]
+    #                 #     #baselineTraces_allTrials_ROIs[iEpoch][iCluster][:,trial_num]= baseline_trace
+    #                 # else:
+    #                 #     baselineTraces_allTrials_ROIs[iEpoch][iCluster]\
+    #                 #         [:,trial_num]= baselineTraces_allTrials_ROIs\
+    #                 #         [stimulus_information['baseline_epoch']][iCluster]\
+    #                 #         [:,trial_num]
                     
-                    try:
-                        wholeTraces_allTrials_ROIs[iEpoch][iCluster][:,trial_num]= roi_whole_trace[:trial_len]
-                        respTraces_allTrials_ROIs[iEpoch][iCluster][:,trial_num]= roi_whole_trace[:trial_len]
-                    except ValueError:
-                        new_trace = np.full((trial_len,),np.nan)
-                        new_trace[:len(roi_whole_trace)] = roi_whole_trace.copy()
-                        wholeTraces_allTrials_ROIs[iEpoch][iCluster][:,trial_num]= new_trace
-                        respTraces_allTrials_ROIs[iEpoch][iCluster][:,trial_num]= new_trace
+    #                 try:
+    #                     wholeTraces_allTrials_ROIs[iEpoch][iCluster][:,trial_num]= roi_whole_trace[:trial_len]
+    #                     respTraces_allTrials_ROIs[iEpoch][iCluster][:,trial_num]= roi_whole_trace[:trial_len]
+    #                 except ValueError:
+    #                     new_trace = np.full((trial_len,),np.nan)
+    #                     new_trace[:len(roi_whole_trace)] = roi_whole_trace.copy()
+    #                     wholeTraces_allTrials_ROIs[iEpoch][iCluster][:,trial_num]= new_trace
+    #                     respTraces_allTrials_ROIs[iEpoch][iCluster][:,trial_num]= new_trace
                         
-                else:
-                    # If the sequence is all random the trials are just separated without any baseline
-                    trialStart = current_trial_coor[0][0]
-                    trialEnd = current_trial_coor[0][1]
+    #             else:
+    #                 # If the sequence is all random the trials are just separated without any baseline
+    #                 trialStart = current_trial_coor[0][0]
+    #                 trialEnd = current_trial_coor[0][1]
                     
-                    if df_use:
-                        roi_whole_trace = roi.df_trace[trialStart:trialEnd]
-                    else:
-                        roi_whole_trace = roi.raw_trace[trialStart:trialEnd]
+    #                 if df_use:
+    #                     roi_whole_trace = roi.df_trace[trialStart:trialEnd]
+    #                 else:
+    #                     roi_whole_trace = roi.raw_trace[trialStart:trialEnd]
                     
-                    try:
-                        wholeTraces_allTrials_ROIs[iEpoch][iCluster][:,trial_num]= roi_whole_trace[:trial_len]
-                        respTraces_allTrials_ROIs[iEpoch][iCluster][:,trial_num]= roi_whole_trace[:trial_len]
+    #                 try:
+    #                     wholeTraces_allTrials_ROIs[iEpoch][iCluster][:,trial_num]= roi_whole_trace[:trial_len]
+    #                     respTraces_allTrials_ROIs[iEpoch][iCluster][:,trial_num]= roi_whole_trace[:trial_len]
 
-                    except ValueError:
-                        new_trace = np.full((trial_len,),np.nan)
-                        new_trace[:len(roi_whole_trace)] = roi_whole_trace.copy()
-                        wholeTraces_allTrials_ROIs[iEpoch][iCluster][:,trial_num]= new_trace
-                        respTraces_allTrials_ROIs[iEpoch][iCluster][:,trial_num]= new_trace
+    #                 except ValueError:
+    #                     new_trace = np.full((trial_len,),np.nan)
+    #                     new_trace[:len(roi_whole_trace)] = roi_whole_trace.copy()
+    #                     wholeTraces_allTrials_ROIs[iEpoch][iCluster][:,trial_num]= new_trace
+    #                     respTraces_allTrials_ROIs[iEpoch][iCluster][:,trial_num]= new_trace
 
 
     
-    for iCluster, roi in enumerate(rois):
-        # if (roi.experiment_info['expected_polarity']=='OFF' and df_method=='postpone'): # get rid of first trial in order to pair up the baseline trial correctly to the response trial
-        #     wholeTraces_allTrials_ROIs[0][iCluster]= wholeTraces_allTrials_ROIs[0][iCluster][:,1:]
-        for iEpoch in trialCoor:        #Juan edit (switched order of loops)
-            #calculate df/f if traces come from FFF stimulation and df calculation has been postponed
+    # for iCluster, roi in enumerate(rois):
+    #     # if (roi.experiment_info['expected_polarity']=='OFF' and df_method=='postpone'): # get rid of first trial in order to pair up the baseline trial correctly to the response trial
+    #     #     wholeTraces_allTrials_ROIs[0][iCluster]= wholeTraces_allTrials_ROIs[0][iCluster][:,1:]
+    #     for iEpoch in trialCoor:        #Juan edit (switched order of loops)
+    #         #calculate df/f if traces come from FFF stimulation and df calculation has been postponed
 
  
 
-                #calculate df_f if it was postponed
-                #TODO, extract sampling rate and calculate 1 or 2 seconds
-                # if roi.experiment_info['expected_polarity']=='ON':
-                #     if iEpoch==0:
-                #         f0= np.nanmean(wholeTraces_allTrials_ROIs[0][iCluster][-20:,:len(trialCoor[iEpoch])],axis=0) #TODO make the slice fixed in time
-                #     else:
-                #         f0=f0[:len(trialCoor[iEpoch])]
-                #     wholeTraces_allTrials_ROIs[iEpoch][iCluster]=(wholeTraces_allTrials_ROIs[iEpoch][iCluster]-f0[np.newaxis,:])/f0[np.newaxis,:]
-                # elif roi.experiment_info['expected_polarity']=='OFF':
-                #     if iEpoch==0:
+    #             #calculate df_f if it was postponed
+    #             #TODO, extract sampling rate and calculate 1 or 2 seconds
+    #             # if roi.experiment_info['expected_polarity']=='ON':
+    #             #     if iEpoch==0:
+    #             #         f0= np.nanmean(wholeTraces_allTrials_ROIs[0][iCluster][-20:,:len(trialCoor[iEpoch])],axis=0) #TODO make the slice fixed in time
+    #             #     else:
+    #             #         f0=f0[:len(trialCoor[iEpoch])]
+    #             #     wholeTraces_allTrials_ROIs[iEpoch][iCluster]=(wholeTraces_allTrials_ROIs[iEpoch][iCluster]-f0[np.newaxis,:])/f0[np.newaxis,:]
+    #             # elif roi.experiment_info['expected_polarity']=='OFF':
+    #             #     if iEpoch==0:
 
-                #         f0= np.nanmean(wholeTraces_allTrials_ROIs[1][iCluster][-20:,:wholeTraces_allTrials_ROIs[iEpoch][iCluster].shape[1]],axis=0)
-                #     else:
-                #         f0=f0
-                #     wholeTraces_allTrials_ROIs[iEpoch][iCluster]=(wholeTraces_allTrials_ROIs[iEpoch][iCluster][:,:len(f0)]-f0[np.newaxis,:])/f0[np.newaxis,:]
-                # else:
-                #     raise Exception('expected polarity not found')
+    #             #         f0= np.nanmean(wholeTraces_allTrials_ROIs[1][iCluster][-20:,:wholeTraces_allTrials_ROIs[iEpoch][iCluster].shape[1]],axis=0)
+    #             #     else:
+    #             #         f0=f0
+    #             #     wholeTraces_allTrials_ROIs[iEpoch][iCluster]=(wholeTraces_allTrials_ROIs[iEpoch][iCluster][:,:len(f0)]-f0[np.newaxis,:])/f0[np.newaxis,:]
+    #             # else:
+    #             #     raise Exception('expected polarity not found')
                 
-            # Appending trial averaged responses to roi instances only if 
-            # df is used
+    #         # Appending trial averaged responses to roi instances only if 
+    #         # df is used
 
-            if df_use:
-                if stimulus_information['random'] == 0:
+    #         if df_use:
+    #             if stimulus_information['random'] == 0:
 
-                    if iEpoch > 0 and iEpoch < len(trialCoor)-1:
+    #                 if iEpoch > 0 and iEpoch < len(trialCoor)-1:
                         
-                        wt = np.concatenate((np.nanmean(wholeTraces_allTrials_ROIs[iEpoch-1][iCluster],axis=1),
-                                            np.nanmean(wholeTraces_allTrials_ROIs[iEpoch][iCluster],axis=1),
-                                            np.nanmean(wholeTraces_allTrials_ROIs[iEpoch+1][iCluster],axis=1)),
-                                            axis =0)
-                        roi.base_dur.append(len(np.nanmean(wholeTraces_allTrials_ROIs[iEpoch-1][iCluster],axis=1)))
-                    else:
-                        if (roi.experiment_info['expected_polarity']=='OFF' and df_method=='postpone' and iEpoch==0) : # get rid of first trial where no response is expected
-                            wholeTraces_allTrials_ROIs[0][iCluster]= wholeTraces_allTrials_ROIs[0][iCluster][:,1:]
+    #                     wt = np.concatenate((np.nanmean(wholeTraces_allTrials_ROIs[iEpoch-1][iCluster],axis=1),
+    #                                         np.nanmean(wholeTraces_allTrials_ROIs[iEpoch][iCluster],axis=1),
+    #                                         np.nanmean(wholeTraces_allTrials_ROIs[iEpoch+1][iCluster],axis=1)),
+    #                                         axis =0)
+    #                     roi.base_dur.append(len(np.nanmean(wholeTraces_allTrials_ROIs[iEpoch-1][iCluster],axis=1)))
+    #                 else:
+    #                     if (roi.experiment_info['expected_polarity']=='OFF' and df_method=='postpone' and iEpoch==0) : # get rid of first trial where no response is expected
+    #                         wholeTraces_allTrials_ROIs[0][iCluster]= wholeTraces_allTrials_ROIs[0][iCluster][:,1:]
 
-                        wt = np.nanmean(wholeTraces_allTrials_ROIs[iEpoch][iCluster],axis=1)
+    #                     wt = np.nanmean(wholeTraces_allTrials_ROIs[iEpoch][iCluster],axis=1)
 
-                        #if df_f was postponed, calculate df/f with the trial averaged traces
+    #                     #if df_f was postponed, calculate df/f with the trial averaged traces
 
-                        # if (stimulus_information['stim_name']=='LocalCircle_5sec_220deg_0degAz_0degEl_Sequential_LumDec_LumInc.txt'\
-                        #     or stimulus_information['stim_name']=='LocalCircle_5sec_120deg_0degAz_0degEl_Sequential_LumDec_LumInc_10sec.txt'\
-                        #     or stimulus_information['stim_name']=='LocalCircle_5sec_120deg_0degAz_0degEl_Sequential_LumDec_LumInc.txt')\
-                        #     and df_method=='postpone':     
+    #                     # if (stimulus_information['stim_name']=='LocalCircle_5sec_220deg_0degAz_0degEl_Sequential_LumDec_LumInc.txt'\
+    #                     #     or stimulus_information['stim_name']=='LocalCircle_5sec_120deg_0degAz_0degEl_Sequential_LumDec_LumInc_10sec.txt'\
+    #                     #     or stimulus_information['stim_name']=='LocalCircle_5sec_120deg_0degAz_0degEl_Sequential_LumDec_LumInc.txt')\
+    #                     #     and df_method=='postpone':     
                                                         
-                        #     f0_interval=int(round(roi.imaging_info['frame_rate']*1))
+    #                     #     f0_interval=int(round(roi.imaging_info['frame_rate']*1))
                             
-                        #     if roi.experiment_info['expected_polarity']=='ON':
-                        #         if iEpoch==0:
-                        #             f0= np.nanmean(wt[-1*f0_interval:],axis=0)
-                        #         #wt= (wt-f0)/f0
-                        #     elif roi.experiment_info['expected_polarity']=='OFF':
+    #                     #     if roi.experiment_info['expected_polarity']=='ON':
+    #                     #         if iEpoch==0:
+    #                     #             f0= np.nanmean(wt[-1*f0_interval:],axis=0)
+    #                     #         #wt= (wt-f0)/f0
+    #                     #     elif roi.experiment_info['expected_polarity']=='OFF':
                                 
-                        #         if iEpoch==0:
-                        #             wt1= np.nanmean(wholeTraces_allTrials_ROIs[1][iCluster],axis=1)
-                        #             f0= np.nanmean(wt1[-1*f0_interval:],axis=0)
-                        #         #wt= (wt-f0)/f0  
+    #                     #         if iEpoch==0:
+    #                     #             wt1= np.nanmean(wholeTraces_allTrials_ROIs[1][iCluster],axis=1)
+    #                     #             f0= np.nanmean(wt1[-1*f0_interval:],axis=0)
+    #                     #         #wt= (wt-f0)/f0  
 
-                        roi.base_dur.append(0) 
+    #                     roi.base_dur.append(0) 
 
-                elif stimulus_information['random'] == 1:
-                    wt = np.nanmean(wholeTraces_allTrials_ROIs[iEpoch][iCluster],axis=1)
-                    base_dur = frameRate * stimulus_information['baseline_duration']
-                    roi.base_dur.append(int(round(base_dur)))
-                else:
+    #             elif stimulus_information['random'] == 1:
+    #                 wt = np.nanmean(wholeTraces_allTrials_ROIs[iEpoch][iCluster],axis=1)
+    #                 base_dur = frameRate * stimulus_information['baseline_duration']
+    #                 roi.base_dur.append(int(round(base_dur)))
+    #             else:
 
-                    #### this is trial averaging
-                    wt = np.nanmean(wholeTraces_allTrials_ROIs[iEpoch][iCluster],axis=1)
-                #### this is trial averaging
-                roi.appendTrace(wt,iEpoch, trace_type = 'whole')
-                roi.appendTrace(np.nanmean(respTraces_allTrials_ROIs[iEpoch][iCluster],axis=1),
-                                  iEpoch, trace_type = 'response' )
-                if np.any(np.isnan(respTraces_allTrials_ROIs[iEpoch][iCluster])):
-                    'flaaag'
-                roi.appendTrace(wholeTraces_allTrials_ROIs[iEpoch][iCluster],iEpoch, trace_type = 'raw')
+    #                 #### this is trial averaging
+    #                 wt = np.nanmean(wholeTraces_allTrials_ROIs[iEpoch][iCluster],axis=1)
+    #             #### this is trial averaging
+    #             roi.appendTrace(wt,iEpoch, trace_type = 'whole')
+    #             roi.appendTrace(np.nanmean(respTraces_allTrials_ROIs[iEpoch][iCluster],axis=1),
+    #                               iEpoch, trace_type = 'response' )
+    #             if np.any(np.isnan(respTraces_allTrials_ROIs[iEpoch][iCluster])):
+    #                 'flaaag'
+    #             roi.appendTrace(wholeTraces_allTrials_ROIs[iEpoch][iCluster],iEpoch, trace_type = 'raw')
                     
                 
         
-    if df_use:
-        print('Traces are stored in ROI objects.')
-    else:
-        print('No trace is stored in objects.')
-    return (wholeTraces_allTrials_ROIs, respTraces_allTrials_ROIs, 
-            baselineTraces_allTrials_ROIs)                 
+    # if df_use:
+    #     print('Traces are stored in ROI objects.')
+    # else:
+    #     print('No trace is stored in objects.')
+    # return (wholeTraces_allTrials_ROIs, respTraces_allTrials_ROIs, 
+    #         baselineTraces_allTrials_ROIs)                 
         
 def plot_roi_properties(images, properties, colormaps,underlying_image,vminmax,
                         exp_ID,depth,save_fig = False, save_dir = None,

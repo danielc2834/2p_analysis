@@ -22,7 +22,7 @@ if len(preprocessing_params.condition_columns)!= len(set(preprocessing_params.co
     open(error_log, 'a', encoding="utf8").write('\n')
 else:
     for tseries_con in os.listdir(paths.processed):
-        if tseries_con.endswith('_h') or tseries_con.endswith('_v'):
+        if 'bar' not in tseries_con:
             continue
         if tseries_con.endswith('.pkl'):
             continue

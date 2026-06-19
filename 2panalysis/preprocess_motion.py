@@ -17,8 +17,8 @@ with open(f'{paths.processed}/processing_progress.pkl', 'rb') as fi:
     processing_progress = pickle.load(fi)
 ################################
 for condition in os.listdir(paths.raw):
-    if 'chirp' not in condition:
-            continue
+    # if 'chirp' not in condition:
+    #         continue
     if condition not in processing_progress.keys():
             processing_progress[condition] = {}
     for fly in os.listdir(f'{paths.raw}/{condition}'):
@@ -57,7 +57,7 @@ for condition in os.listdir(paths.raw):
                         dataset = core_pre.preprocess_dataset(tseries_path,error_log,target,preprocessing_params.caiman_params,usecaiman=False)
                     # if preprocessing_params.auto_roi_selection == True:
                     #     lower_limit=int(round(1.5/pixel_area)) # the limits are hardcoded here 1 to 3 um^2
-                    #     higher_limit=int(round(7.5/pixel_area)) 
+                    #     higher_limit=int(round(75./pixel_area)) 
                     #     find_clusters_STICA_JF_BG(dataset,lower_limit,higher_limit,len(cycle_dict[1]),components=80)
                     processing_progress[condition][fly][tseries] = [True,False,False,False]
         #             one_fly[tseries] = [True, False, False] #motion_alligned, checked motion correction, selected ROIS
@@ -66,44 +66,44 @@ with open(f'{paths.processed}/processing_progress.pkl', 'wb') as fo:
         pickle.dump(processing_progress, fo)
 print('finished motion correction')
 #now it will show all motion corrected stacks and you decide if its good enough, if not files will be deleted, also move visual stim into here
-settings = get_settings()
-settings.application.ipy_interactive = False
-for condition in os.listdir(paths.raw):
-    for fly in os.listdir(f'{paths.raw}/{condition}'):
-        for tseries in os.listdir(f'{paths.raw}/{condition}/{fly}'):
-            if tseries.startswith("TSeries"):
-                target = f'{paths.processed}/{condition}/{fly}/{tseries}'
-                if processing_progress[condition][fly].get(tseries)[1] is None or os.path.exists(f'{target}/_motCorr.tif')==False:
-                    open(error_log, 'a', encoding="utf8").write(f'{tseries}: no motion correction output found')
-                    open(error_log, 'a', encoding="utf8").write('\n')
-                elif processing_progress[condition][fly].get(tseries)[1]==False: 
-                    stack = imread(f'{target}/_motCorr.tif')
-                    viewer = napari.view_image(stack,multiscale=False)
-                    viewer.title = 'Are you happy? [y(es)/ n(o)]'
-                    @viewer.bind_key('y')
-                    def good_motion_correction(viewer):
-                        processing_progress[condition][fly][tseries] = [True, True, False, False]
-                        viewer.close_all()
-                    @viewer.bind_key('n')
-                    def bad_motion_correction(viewer):
-                        processing_progress[condition][fly][tseries] = [True, False, False, False]
-                        viewer.close_all()
-                    napari.run()
-    with open(f'{paths.processed}/processing_progress.pkl', 'wb') as fo:
-            pickle.dump(processing_progress, fo)
+# settings = get_settings()
+# settings.application.ipy_interactive = False
+# for condition in os.listdir(paths.raw):
+#     for fly in os.listdir(f'{paths.raw}/{condition}'):
+#         for tseries in os.listdir(f'{paths.raw}/{condition}/{fly}'):
+#             if tseries.startswith("TSeries"):
+#                 target = f'{paths.processed}/{condition}/{fly}/{tseries}'
+#                 if processing_progress[condition][fly].get(tseries)[1] is None or os.path.exists(f'{target}/_motCorr.tif')==False:
+#                     open(error_log, 'a', encoding="utf8").write(f'{tseries}: no motion correction output found')
+#                     open(error_log, 'a', encoding="utf8").write('\n')
+#                 elif processing_progress[condition][fly].get(tseries)[1]==False: 
+#                     stack = imread(f'{target}/_motCorr.tif')
+#                     viewer = napari.view_image(stack,multiscale=False)
+#                     viewer.title = 'Are you happy? [y(es)/ n(o)]'
+#                     @viewer.bind_key('y')
+#                     def good_motion_correction(viewer):
+#                         processing_progress[condition][fly][tseries] = [True, True, False, False]
+#                         viewer.close_all()
+#                     @viewer.bind_key('n')
+#                     def bad_motion_correction(viewer):
+#                         processing_progress[condition][fly][tseries] = [True, False, False, False]
+#                         viewer.close_all()
+#                     napari.run()
+#     with open(f'{paths.processed}/processing_progress.pkl', 'wb') as fo:
+#             pickle.dump(processing_progress, fo)
 
-#removes motion correection data that were no good
-for condition in processing_progress.keys():
-    for fly in processing_progress[condition].keys():
-        for tseries in processing_progress[condition][fly].keys():
-            if processing_progress[condition][fly].get(tseries)[1] == False:
-                if os.path.exists(f'{paths.processed}/{condition}/{fly}/{tseries}/_motavg.tif'):
-                    os.remove(f'{paths.processed}/{condition}/{fly}/{tseries}/_motavg.tif')
-                if os.path.exists(f'{paths.processed}/{condition}/{fly}/{tseries}/_motCorr.tif'):
-                    os.remove(f'{paths.processed}/{condition}/{fly}/{tseries}/_motCorr.tif')
-                if os.path.exists(f'{paths.processed}/{condition}/{fly}/{tseries}/_motStack.tif'):
-                    os.remove(f'{paths.processed}/{condition}/{fly}/{tseries}/_motStack.tif')
-                processing_progress[condition][fly][tseries] = [False,False,False,False]
-with open(f'{paths.processed}/processing_progress.pkl', 'wb') as fo:
-        pickle.dump(processing_progress, fo)
-print('faulty corrections removed')
+# #removes motion correection data that were no good
+# for condition in processing_progress.keys():
+#     for fly in processing_progress[condition].keys():
+#         for tseries in processing_progress[condition][fly].keys():
+#             if processing_progress[condition][fly].get(tseries)[1] == False:
+#                 if os.path.exists(f'{paths.processed}/{condition}/{fly}/{tseries}/_motavg.tif'):
+#                     os.remove(f'{paths.processed}/{condition}/{fly}/{tseries}/_motavg.tif')
+#                 if os.path.exists(f'{paths.processed}/{condition}/{fly}/{tseries}/_motCorr.tif'):
+#                     os.remove(f'{paths.processed}/{condition}/{fly}/{tseries}/_motCorr.tif')
+#                 if os.path.exists(f'{paths.processed}/{condition}/{fly}/{tseries}/_motStack.tif'):
+#                     os.remove(f'{paths.processed}/{condition}/{fly}/{tseries}/_motStack.tif')
+#                 processing_progress[condition][fly][tseries] = [False,False,False,False]
+# with open(f'{paths.processed}/processing_progress.pkl', 'wb') as fo:
+#         pickle.dump(processing_progress, fo)
+# print('faulty corrections removed')

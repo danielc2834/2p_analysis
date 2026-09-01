@@ -146,11 +146,11 @@ for condition in os.listdir(paths.processed):
                     or visual_stim == '2.2_Stripe_1sec_1secBG_5deg_hor_random_LumInc' or visual_stim == '2.1_Stripe_1sec_1secBG_5deg_hor_random_LumDec'\
                     or visual_stim == '3.1_StimulusData_Discrete_1_16_100000_El_50ms _H' or visual_stim == '3.2_StimulusData_Discrete_1_16_100000_El_50ms_V'\
                     :
+                        #TODO: think about asap instead of gcamp, for temporal
                     continue
                 elif 'Chirp' in visual_stim:
                     analysis_type = ['olfaction']#['gratings_transfer_rois_save'] #moving_gratings, luminance_gratings
                     dFmethod = ['rolling_mean']
-
                 elif visual_stim == '155s 3_Gratings_sine_30degwl_1hz_dir90_270_0_180deg':
                     analysis_type = ["luminance_gratings"]#['gratings_transfer_rois_save'] #moving_gratings, luminance_gratings
                     dFmethod = ['rolling_mean']

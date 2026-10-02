@@ -21,7 +21,7 @@ open(error_log, 'a', encoding="utf8").write(f'\nscript used: {name}\n')
 ################################
 # config_path = f'C:/Master_Project/Code\master_2p/2panalysis\config.yaml'
 # config_path = 'F:/Studium/M.Sc/aktuell/Master Projectwork/master_2p/2panalysis/config.yaml'
-config_path = '2panalysis/config.yaml'
+config_path = '2panalysis/config.yaml' 
 # config_path = r"C:\Master_Project\Code\master_2p\2panalysis\config.yaml"
 with open(config_path, 'r') as config_file:
     config = yaml.safe_load(config_file)
@@ -146,8 +146,9 @@ for condition in os.listdir(paths.processed):
                     or visual_stim == '2.2_Stripe_1sec_1secBG_5deg_hor_random_LumInc' or visual_stim == '2.1_Stripe_1sec_1secBG_5deg_hor_random_LumDec'\
                     or visual_stim == '3.1_StimulusData_Discrete_1_16_100000_El_50ms _H' or visual_stim == '3.2_StimulusData_Discrete_1_16_100000_El_50ms_V'\
                     :
-                        #TODO: think about asap instead of gcamp, for temporal
-                    continue
+                        #TODO: think about asap instaed of gcamp, for temporal
+                    analysis_type = ['olfaction']#['gratings_transfer_rois_save'] #moving_gratings, luminance_gratings
+                    dFmethod = ['rolling_mean']
                 elif 'Chirp' in visual_stim:
                     analysis_type = ['olfaction']#['gratings_transfer_rois_save'] #moving_gratings, luminance_gratings
                     dFmethod = ['rolling_mean']

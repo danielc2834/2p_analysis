@@ -702,7 +702,21 @@ def plot_cluster_colored_traces(traces, gmm_labels, fly_labels, mean_fps, output
     cmap = plt.get_cmap('tab20', max(n_clusters, 1))
     cluster_colors = {c: cmap(i % 20) for i, c in enumerate(unique_clusters)}
 
+    #comment out if want to plot all traces, random subsampling of traces for 50%
+    # rng = np.random.default_rng(0)
+    # gmm_arr = np.asarray(gmm_labels)
+    # total_counts = {c: int(np.sum(gmm_arr == c)) for c in unique_clusters}
+    # selected = []
+    # for c in unique_clusters:
+    #     members = np.where(gmm_arr == c)[0]
+    #     n_plot = max(1, int(round(0.5 * len(members))))
+    #     chosen = rng.choice(members, size=n_plot, replace=False)
+    #     selected.extend(chosen.tolist())
+    # order = sorted(selected, key=lambda i: (gmm_labels[i], str(fly_labels[i])))
+    #until here
+    #plots all
     order = sorted(range(len(traces)), key=lambda i: (gmm_labels[i], str(fly_labels[i])))
+    
     min_len = min(len(traces[i]) for i in order)
     matrix = np.array([traces[i][:min_len] for i in order])
     ordered_clusters = [gmm_labels[i] for i in order]
@@ -4774,16 +4788,19 @@ if __name__ == "__main__":
     multi = False
     degen = True
     temp = False
-    FORCE_RECOMPUTE = False 
+    FORCE_RECOMPUTE = True 
     if multi: 
-        # pkl_files = [r"D:\Christian\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_ON_500_ME_Y.pkl", r"D:\Christian\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_OFF_ME_Y.pkl"]
-        # pkl_files = [r"D:\Christian\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_ON_500_LO_Y.pkl", r"D:\Christian\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_OFF_LO_Y.pkl"]
-        pkl_files = [r"D:\Christian\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_ON_500_LOP_Y.pkl", r"D:\Christian\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_OFF_LOP_Y.pkl"]
+        pkl_files = [r"C:\phd\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_ON_500_ME_Y.pkl", r"C:\phd\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_OFF_ME_Y.pkl"]
+        # pkl_files = [r"C:\phd\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_ON_500_LO_Y.pkl", r"C:\phd\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_OFF_LO_Y.pkl"]
+        # pkl_files = [r"C:\phd\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_ON_500_LOP_Y.pkl", r"C:\phd\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_OFF_LOP_Y.pkl"]
+        # pkl_files = [r"C:\phd\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_ON_500_ME_Y.pkl", r"C:\phd\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_OFF_ME_Y.pkl",
+        #         r"C:\phd\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_ON_500_LO_Y.pkl", r"C:\phd\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_OFF_LO_Y.pkl",
+        #         r"C:\phd\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_ON_500_LOP_Y.pkl", r"C:\phd\02_twophoton\251023_tdc2_cschr_pan\3_DATA\_Chirp_OFF_LOP_Y.pkl"]
     elif degen:
         # pkl_files = [r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Tm1_chirp.pkl", r"D:\Christian\02_twophoton\250730_degen_var\3_DATA\_Tm9_chirp.pkl"]
-        pkl_files = [r"C:\phd\02_twophoton\250730_degen_var\3_DATA\_Tm1_chirp.pkl", r"C:\phd\02_twophoton\250730_degen_var\3_DATA\_Tm4_chirp.pkl", r"C:\phd\02_twophoton\250730_degen_var\3_DATA\_Tm9_chirp.pkl",
-                    r"C:\phd\02_twophoton\250730_degen_var\3_DATA\_Mi1_chirp.pkl", r"C:\phd\02_twophoton\250730_degen_var\3_DATA\_Mi4_chirp.pkl", r"C:\phd\02_twophoton\250730_degen_var\3_DATA\_Mi9_chirp.pkl"]
-        # pkl_files = [r"C:\phd\02_twophoton\250730_degen_var\3_DATA\_Tm1_chirp.pkl", r"C:\phd\02_twophoton\250730_degen_var\3_DATA\_Tm9_chirp.pkl",]
+        # pkl_files = [r"C:\phd\02_twophoton\250730_degen_var\3_DATA\_Tm1_chirp.pkl", r"C:\phd\02_twophoton\250730_degen_var\3_DATA\_Tm4_chirp.pkl", r"C:\phd\02_twophoton\250730_degen_var\3_DATA\_Tm9_chirp.pkl",
+        #             r"C:\phd\02_twophoton\250730_degen_var\3_DATA\_Mi1_chirp.pkl", r"C:\phd\02_twophoton\250730_degen_var\3_DATA\_Mi4_chirp.pkl", r"C:\phd\02_twophoton\250730_degen_var\3_DATA\_Mi9_chirp.pkl"]
+        pkl_files = [r"C:\phd\02_twophoton\250730_degen_var\3_DATA\_Tm9_chirp.pkl",]
         # pkl_files = [r"C:\phd\02_twophoton\250730_degen_var\3_DATA\_Mi1_chirp.pkl", r"C:\phd\02_twophoton\250730_degen_var\3_DATA\_Mi4_chirp.pkl", r"C:\phd\02_twophoton\250730_degen_var\3_DATA\_Mi9_chirp.pkl"]
         # pkl_files = [r"C:\phd\02_twophoton\250730_degen_var\3_DATA\_Tm1_chirp.pkl", r"C:\phd\02_twophoton\250730_degen_var\3_DATA\_Tm4_chirp.pkl", r"C:\phd\02_twophoton\250730_degen_var\3_DATA\_Tm9_chirp.pkl"]
     elif temp:
@@ -4824,7 +4841,7 @@ if __name__ == "__main__":
         condition_label = folder.lstrip('_')
         if multi:
             # metadata = pd.read_excel("D:/Christian/02_twophoton/metadata.xlsx", sheet_name='251023_tdc2_cschr_pan')
-            output_dir=f"D:/Christian/02_twophoton/251023_tdc2_cschr_pan/4_results/{folder}"
+            output_dir=f"C:/phd/02_twophoton/251023_tdc2_cschr_pan/4_results/{folder}"
         elif degen:
             # metadata = pd.read_excel("D:/Christian/02_twophoton/metadata.xlsx", sheet_name='250730_degen_var')
             # output_dir=f"D:/Christian/02_twophoton/250730_degen_var/4_results/{folder}"
@@ -4840,7 +4857,7 @@ if __name__ == "__main__":
             continue
 
         if multi:
-            metadata = pd.read_excel("D:/Christian/02_twophoton/metadata.xlsx", sheet_name='251023_tdc2_cschr_pan')
+            metadata = pd.read_excel("C:/phd/02_twophoton/metadata.xlsx", sheet_name='251023_tdc2_cschr_pan')
         elif degen:
             metadata = pd.read_excel("C:/phd/02_twophoton/metadata.xlsx", sheet_name='250730_degen_var')
         elif temp:
@@ -4856,7 +4873,7 @@ if __name__ == "__main__":
         clustering_results, fly_effect_results, variability_results, run_fps) = process_pkl_file(
             PKL_FILE, metadata, multi, degen, TARGET_FPS,
             original_fps=ORIGINAL_FPS, output_dir=output_dir, ylims=ylims,
-            qi_threshold=0.45, reliability_threshold=0.4, min_reps=3,
+            qi_threshold=0.0, reliability_threshold=0.0, min_reps=3, #TODO: change back to 0.45, and 0.4
         )
         result_dict = {
             'condition_rois': condition_rois, 'fly_rois': fly_rois, 'qi_map': qi_map,
@@ -4869,7 +4886,7 @@ if __name__ == "__main__":
         all_results.append(result_dict)
     
     if multi:
-        combined_output = "D:/Christian/02_twophoton/251023_tdc2_cschr_pan/4_results/combined"
+        combined_output = "C:/phd/02_twophoton/251023_tdc2_cschr_pan/4_results/combined"
     elif degen:
         # combined_output = "D:/Christian/02_twophoton/250730_degen_var/4_results/combined"
         
